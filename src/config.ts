@@ -27,6 +27,35 @@ export function loadSlackConfig() {
   };
 }
 
+export interface CopilotConfig {
+  botToken: string;
+  appToken: string;
+  operatorIds: string[];
+  dbPath: string;
+  libraryDir: string;
+  dashboardPort: number;
+  glossaryUrl?: string;
+}
+
+/** Settings for the Toolchain Copilot. Throws `missing <NAME>` for the first required variable that is absent. */
+export function loadCopilotConfig(env: NodeJS.ProcessEnv = process.env): CopilotConfig {
+  const need = (name: string): string => {
+    const value = env[name]?.trim();
+    if (!value) throw new Error(`missing ${name}`);
+    return value;
+  };
+  return {
+    botToken: need("SLACK_BOT_TOKEN"),
+    appToken: need("SLACK_APP_TOKEN"),
+    // Commas, semicolons or spaces between ids.
+    operatorIds: need("OPERATOR_USER_IDS").split(/[,;\s]+/).filter(Boolean),
+    dbPath: env.DB_PATH || "state/copilot.db",
+    libraryDir: env.LIBRARY_DIR || "library",
+    dashboardPort: Number(env.DASHBOARD_PORT) || 3000,
+    glossaryUrl: env.GLOSSARY_CANVAS_URL || undefined,
+  };
+}
+
 export interface AgentConfig {
   gateway?: GatewayConfig;
   model: string;

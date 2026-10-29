@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Toolchain Copilot onboarding</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: light-dark(#f7f8fa, #14171c); --fg: light-dark(#1b1f27, #e8eaee); --muted: light-dark(#5d6675, #9aa3b2);
+      --card: light-dark(#fff, #1c2027); --line: light-dark(#dde1e8, #2d333d); --seed: light-dark(#8a5a00, #e6b34d);
+      --err: light-dark(#c62828, #ff8a80);
+    }
+    body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+    main { max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 16px; margin: 28px 0 8px; }
+    .sub { color: var(--muted); margin: 0 0 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+    .card h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); text-transform: capitalize; }
+    .metric { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
+    .metric b { font-size: 18px; }
+    .seeded { color: var(--seed); font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 14px; }
+    th { color: var(--muted); font-weight: 600; }
+    #status { color: var(--muted); font-size: 12px; margin-top: 16px; }
+    #error { display: none; padding: 12px; border: 1px solid var(--err); color: var(--err); border-radius: 8px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Toolchain Copilot: onboarding</h1>
+  <p class="sub">Aggregate counts only. No names. Figures marked <span class="seeded">seeded</span> are generated demo data.</p>
+  <div id="error">The metrics could not be loaded. No figures are shown.</div>
+  <section id="headline" class="grid"></section>
+  <h2>Items: ticks per role</h2>
+  <div id="items"></div>
+  <h2>Items: ticks per method</h2>
+  <div id="methods"></div>
+  <p id="status"></p>
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
