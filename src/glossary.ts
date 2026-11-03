@@ -1,4 +1,4 @@
-import { loadLibrary, titleOf } from "./library.js";
+import { glossaryLine, loadLibrary, titleOf } from "./library.js";
 
 /** The fixed list of 14 terms (assist requirement; the authors may change it, OQ-AS-002). */
 export const GLOSSARY_TERMS = [
@@ -36,3 +36,11 @@ export function definitionFor(libraryDir: string, question: string): string | un
     .find((t) => new RegExp(`\\b${t.toLowerCase()}s?\\b`).test(lower));
   return term ? lookupTerm(libraryDir, term) : undefined;
 }
+
+/** The reply to a where-is-the-glossary question; the first message opens with the same line (FR-AS-006, FR-AS-009). */
+export const glossaryLink = (url?: string) => (url ? glossaryLine(url) : "No glossary link is set yet.");
+
+const LOCATION = /\b(where|link|find|what\s+is|what's|whats|show|open)\b/i;
+
+/** A question about the glossary itself rather than a term. Checked after the term path, so it needs no Claude call. */
+export const isGlossaryLocationQuestion = (question: string) => /\bglossary\b/i.test(question) && LOCATION.test(question);

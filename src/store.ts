@@ -24,10 +24,11 @@ CREATE TABLE IF NOT EXISTS member (
   role_chosen_at TEXT,
   started_by TEXT,
   dm_channel_id TEXT,
-  welcome_ts TEXT,
+  first_message_ts TEXT,
   checklist_ts TEXT,
   completed_at TEXT,
-  seeded INTEGER NOT NULL DEFAULT 0
+  seeded INTEGER NOT NULL DEFAULT 0,
+  pin_refused INTEGER
 );
 CREATE TABLE IF NOT EXISTS checklist_item (
   member_id TEXT NOT NULL,
@@ -77,6 +78,11 @@ export function openStore(path: string): Store {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
+  // CREATE TABLE IF NOT EXISTS leaves a file made before pin_refused existed without the column (FR-CL-014).
+  const columns = (db.prepare("PRAGMA table_info(member)").all() as { name: string }[]).map((c) => c.name);
+  if (!columns.includes("pin_refused")) db.exec("ALTER TABLE member ADD COLUMN pin_refused INTEGER");
+  // A file made before the first message was renamed from the welcome keeps its rows (FR-ST-008).
+  if (columns.includes("welcome_ts")) db.exec("ALTER TABLE member RENAME COLUMN welcome_ts TO first_message_ts");
   return {
     run: (sql, ...params) => Number(db.prepare(sql).run(...params).changes),
     get: <T>(sql: string, ...params: Param[]) => db.prepare(sql).get(...params) as T | undefined,

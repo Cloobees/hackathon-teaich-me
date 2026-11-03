@@ -25,6 +25,27 @@ describe("validateReport: one fixture per failure", () => {
     const { store, nonce } = setup();
     expect(validateReport(store, "```\n" + i2(nonce) + "\n```", ctx).ok).toBe(true);
   });
+  it("ignores a trailing ' *Sent using* <@...>' the Slack connector appends (FR-VF-016)", () => {
+    const { store, nonce } = setup("I4");
+    const text = `COPILOT-REPORT v1
+item: I4
+nonce: ${nonce}
+skill: copilot-check *Sent using* <@U0CDESX6B0V>`;
+    expect(parseReport(text)?.fields.skill).toBe("copilot-check");
+    expect(validateReport(store, text, ctx)).toMatchObject({ ok: true, item: "I4" });
+  });
+  it("failure messages point at the check button and posting the block again, never Get report prompt or paste", () => {
+    const { store, nonce } = setup("I2", "U2");
+    const messages = [
+      validateReport(store, "hello", ctx),
+      validateReport(store, i2("nope"), ctx),
+      validateReport(store, i2(nonce), ctx),
+      validateReport(store, i2(nonce, { last_knowledge_activity: "null" }), { ...ctx, memberId: "U2" }),
+    ].map((r) => (r as { message: string }).message);
+    for (const message of messages) expect(message).not.toMatch(/get report prompt|paste/i);
+    expect(messages[0]).toMatch(/post the block again, unchanged/i);
+    expect(messages[1]).toContain("check button");
+  });
   it("malformed block", () => {
     const { store } = setup();
     expect(validateReport(store, "COPILOT-REPORT v1\nnonsense", ctx)).toMatchObject({ ok: false, rule: "malformed" });
@@ -85,14 +106,14 @@ describe("validateReport: one fixture per failure", () => {
 describe("prompts", () => {
   it("each prompt carries the nonce and asks for the fixed block", () => {
     for (const item of ["I2", "I4", "I6"] as const) {
-      const prompt = promptFor(item, "abc123");
+      const prompt = promptFor(item, "abc123", "C0CHECK01");
       expect(prompt).toContain("abc123");
     }
-    expect(promptFor("I2", "abc123")).toContain("COPILOT-REPORT v1\nitem: I2\nnonce: abc123");
-    expect(promptFor("I4", "abc123")).toContain("copilot-check");
+    expect(promptFor("I2", "abc123", "C0CHECK01")).toContain("COPILOT-REPORT v1\nitem: I2\nnonce: abc123");
+    expect(promptFor("I4", "abc123", "C0CHECK01")).toContain("copilot-check");
   });
   it("the block a prompt asks for parses with the grammar the validator reads", () => {
-    const parsed = parseReport(promptFor("I6", "n1"));
+    const parsed = parseReport(promptFor("I6", "n1", "C0CHECK01"));
     expect(parsed?.fields).toMatchObject({ item: "I6", nonce: "n1" });
   });
   it("two issues give two nonces (DD-VF-005)", () => {

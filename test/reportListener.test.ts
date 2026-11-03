@@ -4,14 +4,17 @@ import { itemStatuses, makeDeps, onboard } from "./helpers.js";
 
 type D = ReturnType<typeof makeDeps>;
 
-const nonceFrom = (deps: D) => /nonce[: ]+(\S+)/.exec(deps.fake.last("chat.postMessage").text)?.[1] as string;
+const CHECK = "C0CHECK01";
+const PASTE = { reportPasteFallback: true };
+const nonceFrom = (deps: D) => /nonce[: ]+([\w-]+)/.exec(deps.fake.last("chat.postMessage").text)?.[1] as string;
 const i2Block = (nonce: string, activity = "2026-10-26T10:12:00Z") =>
   `COPILOT-REPORT v1\nitem: I2\nnonce: ${nonce}\nscope_slug: my-workspace@sam@example.com\nlast_knowledge_activity: ${activity}`;
 
-async function ready(role: "technical" | "non-technical" = "technical"): Promise<D> {
-  const deps = makeDeps();
+async function ready(role: "technical" | "non-technical" = "technical", tickI1 = true, overrides: Partial<Parameters<typeof makeDeps>[0]> = {}): Promise<D> {
+  const deps = makeDeps({ checkChannelId: CHECK, ...overrides });
   deps.fake.emails.U1 = "sam@example.com";
   await onboard(deps, "U1", role);
+  if (tickI1) await handleAttest(deps, "U1", "I1"); // I1 gates the checks (FR-VF-012)
   deps.clock.advance(12 * 60_000);
   return deps;
 }
@@ -25,7 +28,10 @@ describe("report prompt button (DD-VF-005)", () => {
     const second = nonceFrom(deps);
     expect(first).not.toBe(second);
     expect(deps.store.all("SELECT * FROM report_nonce WHERE member_id = 'U1' AND item_id = 'I2'")).toHaveLength(2);
-    expect(deps.fake.last("chat.postMessage").text).toContain("list_scopes");
+    const text = deps.fake.last("chat.postMessage").text;
+    expect(text).toContain("list_scopes");
+    expect(text).toContain(CHECK);
+    expect(text).toMatch(/post .*unchanged.*Slack connector/is);
   });
   it("issues nothing for an item with no report block", async () => {
     const deps = await ready();
@@ -35,9 +41,10 @@ describe("report prompt button (DD-VF-005)", () => {
   });
 });
 
-describe("report DM listener", () => {
+// The DM listener reads blocks only with the paste fallback on (BP-052); the default route is the check channel.
+describe("report DM listener (paste fallback on)", () => {
   it("a valid I2 block ticks I2 validated with the nonce as evidence (Scenario 2)", async () => {
-    const deps = await ready();
+    const deps = await ready("technical", true, PASTE);
     await issueReportPrompt(deps, "U1", "I2");
     const nonce = nonceFrom(deps);
     expect(await handleReportDm(deps, { memberId: "U1", channel: "D-U1", text: i2Block(nonce) })).toBe(true);
@@ -48,8 +55,20 @@ describe("report DM listener", () => {
     });
   });
 
+  it("a valid block is followed by one instruction message naming the item and giving the next one (FR-CL-011)", async () => {
+    const deps = await ready("technical", true, PASTE);
+    await issueReportPrompt(deps, "U1", "I2");
+    const nonce = nonceFrom(deps);
+    const posts = deps.fake.of("chat.postMessage").length;
+    await handleReportDm(deps, { memberId: "U1", channel: "D-U1", text: i2Block(nonce) });
+    expect(deps.fake.of("chat.postMessage")).toHaveLength(posts + 1);
+    const next = JSON.stringify(deps.fake.last("chat.postMessage").blocks);
+    expect(next).toContain("2. Connect Claude to Context Builder");
+    expect(next).toContain("attest_I3");
+  });
+
   it("an invalid block gives one reply naming the rule and no tick (Scenario 3)", async () => {
-    const deps = await ready();
+    const deps = await ready("technical", true, PASTE);
     await issueReportPrompt(deps, "U1", "I2");
     const nonce = nonceFrom(deps);
     const posts = deps.fake.of("chat.postMessage").length;
@@ -60,7 +79,7 @@ describe("report DM listener", () => {
   });
 
   it("a reused nonce says already used and changes nothing (Scenario 4)", async () => {
-    const deps = await ready();
+    const deps = await ready("technical", true, PASTE);
     await issueReportPrompt(deps, "U1", "I2");
     const nonce = nonceFrom(deps);
     await handleReportDm(deps, { memberId: "U1", channel: "D-U1", text: i2Block(nonce) });
@@ -71,9 +90,9 @@ describe("report DM listener", () => {
   });
 
   it("a valid I4 block ticks I4 and I3 validated with one evidence_ref (Scenario 7)", async () => {
-    const deps = await ready();
+    const deps = await ready("technical", true, PASTE);
     await issueReportPrompt(deps, "U1", "I4");
-    const nonce = /nonce (\S+)\./.exec(deps.fake.last("chat.postMessage").text)?.[1] ?? /with the nonce (\S+?)\./.exec(deps.fake.last("chat.postMessage").text)?.[1];
+    const nonce = nonceFrom(deps);
     await handleReportDm(deps, { memberId: "U1", channel: "D-U1", text: `COPILOT-REPORT v1\nitem: I4\nnonce: ${nonce}\nskill: copilot-check` });
     const rows = deps.store.all<{ item_id: string; method: string; evidence_ref: string }>(
       "SELECT item_id, method, evidence_ref FROM checklist_item WHERE member_id = 'U1' AND item_id IN ('I3','I4')",
@@ -84,12 +103,12 @@ describe("report DM listener", () => {
   });
 
   it("text without a report block is left for the question listener", async () => {
-    const deps = await ready();
+    const deps = await ready("technical", true, PASTE);
     expect(await handleReportDm(deps, { memberId: "U1", channel: "D-U1", text: "How do I connect Slack?" })).toBe(false);
   });
 
   it("a member with no role is told to choose one", async () => {
-    const deps = makeDeps();
+    const deps = makeDeps(PASTE);
     expect(await handleReportDm(deps, { memberId: "U7", channel: "D7", text: "COPILOT-REPORT v1" })).toBe(true);
     expect(deps.fake.last("chat.postMessage").text).toContain("role");
   });
@@ -108,7 +127,7 @@ describe("self-attest (FR-VF-002)", () => {
 
 describe("Claude mention (FR-VF-003, assumed route SP-1)", () => {
   it("a message mentioning the Claude app ticks I1 observed with the message ts", async () => {
-    const deps = await ready();
+    const deps = await ready("technical", false);
     await handleChannelMessage(deps, { memberId: "U1", text: "hey <@UCLAUDE> help", ts: "555.1", claudeAppId: "UCLAUDE" });
     expect(deps.store.get("SELECT method, evidence_ref FROM checklist_item WHERE member_id = 'U1' AND item_id = 'I1'")).toMatchObject({
       method: "observed",
@@ -116,12 +135,12 @@ describe("Claude mention (FR-VF-003, assumed route SP-1)", () => {
     });
   });
   it("a message without the mention ticks nothing", async () => {
-    const deps = await ready();
+    const deps = await ready("technical", false);
     await handleChannelMessage(deps, { memberId: "U1", text: "hello team", ts: "555.2", claudeAppId: "UCLAUDE" });
     expect(itemStatuses(deps, "U1").I1).toBe("pending");
   });
   it("no Claude app id ticks nothing", async () => {
-    const deps = await ready();
+    const deps = await ready("technical", false);
     await handleChannelMessage(deps, { memberId: "U1", text: "<@UCLAUDE>", ts: "555.3" });
     expect(itemStatuses(deps, "U1").I1).toBe("pending");
   });

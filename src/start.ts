@@ -1,6 +1,7 @@
 import { createChecklist } from "./checklistMessage.js";
 import type { Deps } from "./deps.js";
-import { roleDefinitions } from "./library.js";
+import { firstMessageText, roleDefinitions } from "./library.js";
+import { handleReset } from "./reset.js";
 import type { Role } from "./store.js";
 
 export type StartOutcome = "sent" | "bot" | "duplicate" | "dm_failed";
@@ -35,14 +36,15 @@ export async function startOnboarding(deps: Deps, input: StartInput): Promise<St
   deps.store.run("INSERT OR IGNORE INTO member (member_id, started_by, dm_channel_id) VALUES (?, ?, ?)", memberId, startedBy, dm);
 
   const defs = roleDefinitions(deps.libraryDir);
-  const glossary = deps.glossaryUrl ? `\nKey Claude terms are in the glossary canvas: ${deps.glossaryUrl}` : "";
-  const text = "Welcome to your Claude onboarding. First, which describes you better?";
+  // The first message is read at each start, so an author's edit needs no deploy (FR-AS-008).
+  const first = firstMessageText(deps.libraryDir, deps.glossaryUrl);
+  const question = `Which describes you better?\n• ${defs.technical}\n• ${defs.nonTechnical}`;
   const posted = await deps.slack.chat.postMessage({
     channel: dm,
-    text,
+    text: [first, question].filter(Boolean).join("\n\n"),
     blocks: [
-      { type: "section", text: { type: "mrkdwn", text: `*Welcome to your Claude onboarding.* I will walk you through the toolchain step by step.${glossary}` } },
-      { type: "section", text: { type: "mrkdwn", text: `Which describes you better?\n• ${defs.technical}\n• ${defs.nonTechnical}` } },
+      ...(first ? [{ type: "section", text: { type: "mrkdwn", text: first } }] : []),
+      { type: "section", text: { type: "mrkdwn", text: question } },
       {
         type: "actions",
         elements: [
@@ -52,17 +54,19 @@ export async function startOnboarding(deps: Deps, input: StartInput): Promise<St
       },
     ],
   });
-  if (posted.ts) deps.store.run("UPDATE member SET welcome_ts = ? WHERE member_id = ?", posted.ts, memberId);
+  if (posted.ts) deps.store.run("UPDATE member SET first_message_ts = ? WHERE member_id = ?", posted.ts, memberId);
   deps.log("start", { member: memberId, started_by: startedBy, outcome: "sent" });
   return "sent";
 }
 
-const MENTION = /<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/;
+export const MENTION = /<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/;
 
 export const OPERATOR_ONLY = "The `/onboard @member` form is for operators. Run `/onboard` on its own to start your own checklist.";
+export const RESET_OPERATOR_ONLY = "Reset is for operators. Ask an operator to run it for you.";
 
 /** `/onboard` and `/onboard @member`. Returns the private reply for the caller. */
 export async function handleOnboard(deps: Deps, input: { callerId: string; text: string; triggerId?: string }): Promise<string> {
+  if (input.text.trim().split(/\s+/)[0] === "reset") return handleReset(deps, input);
   const mention = MENTION.exec(input.text)?.[1];
   const target = mention ?? input.callerId;
   if (input.text.trim() && !mention) return "Usage: `/onboard` or `/onboard @member` (operators only).";

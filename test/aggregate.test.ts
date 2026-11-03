@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { getMetrics } from "../src/aggregate.js";
-import { createRows, loadItems, tick } from "../src/checklist.js";
+import { createRows, itemsForRole, loadItems, tick } from "../src/checklist.js";
 import { seedCohort } from "../src/seedCohort.js";
 import { openStore, type Role, type Store } from "../src/store.js";
 
 const config = loadItems();
 const now = () => "2026-10-26T10:00:00.000Z";
+
+const all = (role: Role) => itemsForRole(config, role).length;
 
 /** A member with the first `ticked` items done, in order. Completes the member when all are ticked. */
 function addMember(store: Store, id: string, role: Role, ticked: number, seeded = 0) {
@@ -17,10 +19,10 @@ function addMember(store: Store, id: string, role: Role, ticked: number, seeded 
 describe("getMetrics (Scenario 1)", () => {
   it("matches the worked example: 5 started, 3 completed, 60%, 2 in progress", () => {
     const store = openStore(":memory:");
-    addMember(store, "T1", "technical", 6);
-    addMember(store, "T2", "technical", 6);
+    addMember(store, "T1", "technical", all("technical"));
+    addMember(store, "T2", "technical", all("technical"));
     addMember(store, "T3", "technical", 2);
-    addMember(store, "N1", "non-technical", 4);
+    addMember(store, "N1", "non-technical", all("non-technical"));
     addMember(store, "N2", "non-technical", 1);
     const m = getMetrics(store, config);
 
@@ -32,8 +34,8 @@ describe("getMetrics (Scenario 1)", () => {
 
   it("counts item ticks per group, with n/a (null) where the item does not apply", () => {
     const store = openStore(":memory:");
-    addMember(store, "T1", "technical", 6);
-    addMember(store, "N1", "non-technical", 4);
+    addMember(store, "T1", "technical", all("technical"));
+    addMember(store, "N1", "non-technical", all("non-technical"));
     const i5 = getMetrics(store, config).items.find((i) => i.id === "I5");
     expect(i5?.ticks.technical?.total).toBe(1);
     expect(i5?.ticks["non-technical"]).toBeNull();
@@ -65,8 +67,50 @@ describe("most-waiting item (Scenario 6)", () => {
   });
   it("is null with no one in progress", () => {
     const store = openStore(":memory:");
-    addMember(store, "A", "non-technical", 4);
+    addMember(store, "A", "non-technical", all("non-technical"));
     expect(getMetrics(store, config).groups.all.mostWaiting).toBeNull();
+  });
+});
+
+describe("I7 (Scenarios 7 and 8)", () => {
+  it("is the last item for both roles: 7 items for technical, 5 for non-technical", () => {
+    const store = openStore(":memory:");
+    addMember(store, "T1", "technical", all("technical"));
+    addMember(store, "N1", "non-technical", all("non-technical"));
+    const items = getMetrics(store, config).items;
+    expect(items.filter((i) => i.ticks.technical !== null)).toHaveLength(7);
+    expect(items.filter((i) => i.ticks["non-technical"] !== null)).toHaveLength(5);
+    expect(items.at(-1)?.id).toBe("I7");
+    expect(items.find((i) => i.id === "I7")?.ticks.all?.total).toBe(2);
+  });
+  it("is the most-waiting item when two members have ticked everything before it", () => {
+    const store = openStore(":memory:");
+    addMember(store, "T1", "technical", 6);
+    addMember(store, "N1", "non-technical", 4);
+    expect(getMetrics(store, config).groups.all.mostWaiting).toMatchObject({ item: "I7", members: 2 });
+  });
+  it("counts two self-attested I7 ticks as self-attested 2 and observed 0", () => {
+    const store = openStore(":memory:");
+    addMember(store, "T1", "technical", all("technical"));
+    addMember(store, "N1", "non-technical", all("non-technical"));
+    const i7 = getMetrics(store, config).items.find((i) => i.id === "I7");
+    expect(i7?.methods).toMatchObject({ "self-attested": { total: 2 }, observed: { total: 0 }, validated: { total: 0 } });
+  });
+  it("seeded I7 ticks are self-attested only", () => {
+    const store = openStore(":memory:");
+    seedCohort(store, config, now);
+    const i7 = getMetrics(store, config).items.find((i) => i.id === "I7");
+    expect(i7?.methods).toMatchObject({ "self-attested": { total: 10, seeded: 10 }, observed: { total: 0 } });
+  });
+  it("no item id or name starts with a list number", () => {
+    const store = openStore(":memory:");
+    addMember(store, "T1", "technical", all("technical"));
+    const { items } = getMetrics(store, config);
+    for (const item of items) {
+      expect(item.id).not.toMatch(/^\s*\d+\s*[.)]/);
+      expect(item.name).not.toMatch(/^\s*\d+\s*[.)]/);
+    }
+    expect(JSON.stringify(getMetrics(store, config))).not.toMatch(/"(id|name)":"\s*\d+\s*[.)]/);
   });
 });
 

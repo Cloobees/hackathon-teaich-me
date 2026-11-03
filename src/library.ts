@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import type { Role } from "./store.js";
@@ -8,8 +8,13 @@ export interface LibraryFile {
   title: string;
   roles: ("all" | Role)[];
   item?: string;
+  /** One line each: what the member does, and what the copilot checks (FR-AS-012). */
+  action?: string;
+  check?: string;
   body: string;
 }
+
+const oneLine = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
 
 const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
@@ -25,6 +30,8 @@ export function parseLibraryFile(file: string, text: string): LibraryFile {
     title: meta.title.trim(),
     roles: roles.length ? roles : ["all"],
     item: meta.item ? String(meta.item) : undefined,
+    action: oneLine(meta.action),
+    check: oneLine(meta.check),
     // HTML comments hold the trust marker and review notes; they never reach the model or the member.
     body: (match[2] as string).replace(/<!--[\s\S]*?-->/g, "").trim(),
   };
@@ -54,12 +61,28 @@ export function roleDefinitions(dir: string): { technical: string; nonTechnical:
   };
 }
 
+/** The glossary link line, as it appears in the first message and in the reply to a where-is-the-glossary question. */
+export const glossaryLine = (url: string) => `The glossary canvas: ${url}`;
+
+/**
+ * The first message: the glossary link line (omitted when no URL is set), then the body of `first-message.md`
+ * (omitted when the file is absent). Read on each call, so an edit shows at the next start (FR-AS-008).
+ */
+export function firstMessageText(dir: string, glossaryUrl?: string): string {
+  const path = join(dir, "first-message.md");
+  const body = existsSync(path) ? parseLibraryFile("first-message.md", readFileSync(path, "utf8")).body : "";
+  return [glossaryUrl ? glossaryLine(glossaryUrl) : "", body].filter(Boolean).join("\n\n");
+}
+
 const SECRET_SHAPES = /xoxb-|xapp-|eyJ/;
 
 /** Lint for BP-011 and BP-010. Returns problems; empty means the library passes. */
 export function checkLibrary(dir: string): string[] {
   const problems: string[] = [];
   const files: LibraryFile[] = [];
+  for (const name of readdirSync(dir).filter((n) => !n.endsWith(".md")).sort()) {
+    problems.push(`${name}: only .md files belong in the library folder (other files go in library-files/)`);
+  }
   for (const name of markdownFiles(dir)) {
     const text = readFileSync(join(dir, name), "utf8");
     if (SECRET_SHAPES.test(text)) problems.push(`${name}: holds a token-shaped string (xoxb-, xapp- or eyJ)`);
@@ -76,7 +99,7 @@ export function checkLibrary(dir: string): string[] {
     if (!lines.some((l) => l.startsWith("technical:"))) problems.push("role-definitions: no line starting 'technical:'");
     if (!lines.some((l) => l.startsWith("non-technical:"))) problems.push("role-definitions: no line starting 'non-technical:'");
   }
-  for (const id of ["I1", "I2", "I3", "I4"]) {
+  for (const id of ["I1", "I2", "I3", "I4", "I7"]) {
     if (!files.some((f) => f.item === id && f.roles.includes("all"))) problems.push(`missing required file: item ${id} for all roles`);
   }
   for (const id of ["I5", "I6"]) {

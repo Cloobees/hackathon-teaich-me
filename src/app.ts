@@ -9,7 +9,7 @@ import { handleQuestion } from "./questions.js";
 import type { SlackClient } from "./slack.js";
 import { handleOnboard, handleRole, handleTeamJoin } from "./start.js";
 import { openStore, type Role } from "./store.js";
-import { findClaudeAppId, handleAttest, handleChannelMessage, handleReportDm, issueReportPrompt } from "./verify.js";
+import { findClaudeAppId, handleAttest, handleChannelMessage, handleChannelReport, handleReportDm, issueReportPrompt } from "./verify.js";
 
 // The Toolchain Copilot entry point: Bolt in Socket Mode, the store, and the dashboard on 127.0.0.1.
 // Written against the designs; not yet run against a live Slack workspace (BP-001).
@@ -25,10 +25,13 @@ const depsFor = (client: unknown): Deps => ({
   slack: client as SlackClient,
   items,
   libraryDir: config.libraryDir,
+  skillZipPath: config.skillZipPath,
   now: () => new Date().toISOString(),
   log,
   operators: config.operatorIds,
   glossaryUrl: config.glossaryUrl,
+  checkChannelId: config.checkChannelId,
+  reportPasteFallback: config.reportPasteFallback,
 });
 
 let claudeAppId: string | undefined;
@@ -72,6 +75,11 @@ app.message(async ({ message, client }) => {
     // Report blocks go to verification; everything else is a question.
     if (await handleReportDm(deps, { memberId: m.user, channel: m.channel, text: m.text })) return;
     await handleQuestion(deps, claude, { memberId: m.user, channel: m.channel, text: m.text });
+    return;
+  }
+  if (m.text.includes("COPILOT-REPORT")) {
+    // A report block counts only in the check channel; in any other channel it is ignored.
+    if (deps.checkChannelId && m.channel === deps.checkChannelId) await handleChannelReport(deps, { memberId: m.user, text: m.text });
     return;
   }
   await handleChannelMessage(deps, { memberId: m.user, text: m.text, ts: m.ts, claudeAppId });

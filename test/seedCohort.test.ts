@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadItems } from "../src/checklist.js";
+import { itemsForRole, loadItems } from "../src/checklist.js";
 import { seedCohort } from "../src/seedCohort.js";
 import { openStore } from "../src/store.js";
 
@@ -18,11 +18,28 @@ describe("seedCohort", () => {
       expect(store.all("SELECT * FROM member WHERE role = ? AND completed_at IS NULL", role).length).toBeGreaterThan(0);
     }
   });
-  it("gives 6 item rows to a technical member and 4 to a non-technical one", () => {
+  it("gives 7 item rows to a technical member and 5 to a non-technical one", () => {
     const store = openStore(":memory:");
     seedCohort(store, config, now);
-    expect(store.all("SELECT * FROM checklist_item WHERE member_id = 'SEED-T01'")).toHaveLength(6);
-    expect(store.all("SELECT * FROM checklist_item WHERE member_id = 'SEED-N01'")).toHaveLength(4);
+    expect(store.all("SELECT * FROM checklist_item WHERE member_id = 'SEED-T01'")).toHaveLength(7);
+    expect(store.all("SELECT * FROM checklist_item WHERE member_id = 'SEED-N01'")).toHaveLength(5);
+  });
+  it("ticks I7 as self-attested for every complete member, leaves it pending for the rest, and never seeds an observed I7", () => {
+    const store = openStore(":memory:");
+    seedCohort(store, config, now);
+    for (const role of ["technical", "non-technical"] as const) {
+      const complete = store.all<{ member_id: string }>("SELECT member_id FROM member WHERE role = ? AND completed_at IS NOT NULL", role);
+      const inProgress = store.all<{ member_id: string }>("SELECT member_id FROM member WHERE role = ? AND completed_at IS NULL", role);
+      expect(complete.length).toBe(5);
+      for (const { member_id } of complete) {
+        expect(store.get("SELECT status, method FROM checklist_item WHERE member_id = ? AND item_id = 'I7'", member_id)).toEqual({ status: "ticked", method: "self-attested" });
+        expect(store.all("SELECT * FROM checklist_item WHERE member_id = ? AND status = 'ticked'", member_id)).toHaveLength(itemsForRole(config, role).length);
+      }
+      for (const { member_id } of inProgress) {
+        expect(store.get("SELECT status, method FROM checklist_item WHERE member_id = ? AND item_id = 'I7'", member_id)).toEqual({ status: "pending", method: null });
+      }
+    }
+    expect(store.all("SELECT * FROM checklist_item WHERE item_id = 'I7' AND method = 'observed'")).toHaveLength(0);
   });
   it("is safe to rerun and never touches a live member", () => {
     const store = openStore(":memory:");

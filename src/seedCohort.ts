@@ -1,11 +1,11 @@
 import { itemsForRole, type ItemsConfig } from "./checklist.js";
 import type { Method, Role, Store } from "./store.js";
 
-// Items ticked per member, in item order. Technical members have six items, non-technical four.
+// Items ticked per member, in item order. Technical members have seven items, non-technical five.
 // Five completed and five in progress per role, so the dashboard shows the most-waiting item (A-DB-003).
 const PROGRESS: Record<Role, number[]> = {
-  technical: [6, 6, 6, 6, 6, 5, 4, 3, 2, 1],
-  "non-technical": [4, 4, 4, 4, 4, 3, 3, 2, 1, 0],
+  technical: [7, 7, 7, 7, 7, 5, 4, 3, 2, 1],
+  "non-technical": [5, 5, 5, 5, 5, 3, 3, 2, 1, 0],
 };
 const METHODS: Record<string, Method[]> = {
   I1: ["self-attested", "observed"],
@@ -14,6 +14,7 @@ const METHODS: Record<string, Method[]> = {
   I4: ["validated", "validated", "self-attested"],
   I5: ["self-attested"],
   I6: ["validated", "self-attested"],
+  I7: ["self-attested"],
 };
 const DAY_MS = 86_400_000;
 

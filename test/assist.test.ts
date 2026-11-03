@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { answer, API_ERROR } from "../src/assist.js";
 import type { ClaudeClient } from "../src/claudeClient.js";
-import { definitionFor, GLOSSARY_TERMS, lookupTerm } from "../src/glossary.js";
+import type { Deps } from "../src/deps.js";
+import { definitionFor, GLOSSARY_TERMS, glossaryLink, isGlossaryLocationQuestion, lookupTerm } from "../src/glossary.js";
+import { firstMessageText } from "../src/library.js";
 import { handleQuestion } from "../src/questions.js";
 import { applyTick } from "../src/checklistMessage.js";
 import { FIXTURE_LIBRARY, makeDeps, onboard } from "./helpers.js";
@@ -17,6 +19,12 @@ const fake = (reply: string | Error) => {
     },
   };
   return { client, sent };
+};
+
+const BARE_ID = /I[1-7]/;
+const I4_BODY = "Add the copilot-check skill, then run it with the nonce from the checklist.";
+const tickThrough = async (deps: Deps, memberId: string, ids: string[]) => {
+  for (const id of ids) await applyTick(deps, memberId, id, "self-attested", null);
 };
 
 describe("answer", () => {
@@ -61,15 +69,63 @@ describe("answer", () => {
     expect(API_ERROR).toBe("I could not answer that just now");
   });
 
-  it("ends with the next unticked item and its instruction for the role (Scenario 2)", async () => {
+  it("ends with the next unticked item by position and its instruction for the role (Scenario 2)", async () => {
     const deps = makeDeps();
     await onboard(deps, "U1", "technical");
-    await applyTick(deps, "U1", "I1", "self-attested", null);
-    await applyTick(deps, "U1", "I2", "self-attested", null);
-    const { client } = fake("Do X. [Connect Claude to Slack]");
+    await tickThrough(deps, "U1", ["I1", "I2", "I3"]);
+    const { client, sent } = fake("Do X. [Connect Claude to Slack]");
     const reply = await answer(deps, client, { memberId: "U1", question: "How?" });
-    expect(reply.endsWith("Create a Project in Claude and give it a name and instructions.")).toBe(true);
-    expect(reply).toContain("I3 Set up a Claude Project");
+    expect(reply).toContain("4. Add a skill to the Project and use it");
+    expect(reply.endsWith(I4_BODY)).toBe(true);
+    expect(reply).not.toMatch(BARE_ID);
+    expect(sent[0]?.user).not.toMatch(BARE_ID);
+    expect(sent[0]?.system).not.toMatch(BARE_ID);
+  });
+
+  it("names a non-technical member's I7 as item 5 (FR-AS-003)", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "non-technical");
+    await tickThrough(deps, "U2", ["I1", "I2", "I3", "I4"]);
+    const { client } = fake("Do X. [Connect Claude to Slack]");
+    const reply = await answer(deps, client, { memberId: "U2", question: "How?" });
+    expect(reply).toContain("5. Join the int-sf-ai channel");
+    expect(reply.endsWith("Join the int-sf-ai channel in Slack, then click \"I did it\" on the checklist.")).toBe(true);
+    expect(reply).not.toMatch(BARE_ID);
+  });
+
+  it("the prompt holds the current item's number, title, file title and the rule (FR-AS-010)", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    await tickThrough(deps, "U1", ["I1", "I2", "I3"]);
+    const { client, sent } = fake("Do X. [Connect Claude to Slack]");
+    await answer(deps, client, { memberId: "U1", question: "how do I add a skill to my project?" });
+    const user = sent[0]?.user as string;
+    expect(user).toContain("4. Add a skill to the Project and use it");
+    expect(user).toContain('"Add a skill to the Project"');
+    expect(user).toContain("answered from that file");
+  });
+
+  it("appends the instruction once whether or not the answer cites the current item's file (Scenario 7)", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    await tickThrough(deps, "U1", ["I1", "I2", "I3"]);
+    for (const cited of ["Add a skill to the Project", "Connect Claude to Slack"]) {
+      const { client } = fake(`Do X. [${cited}]`);
+      const reply = await answer(deps, client, { memberId: "U1", question: "how do I add a skill to my project?" });
+      expect(reply.split(I4_BODY)).toHaveLength(2);
+      expect(reply.endsWith(I4_BODY)).toBe(true);
+    }
+  });
+
+  it("a member with every item ticked gets the finished line", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "non-technical");
+    await tickThrough(deps, "U2", ["I1", "I2", "I3", "I4", "I7"]);
+    const { client, sent } = fake("Do X. [Connect Claude to Slack]");
+    const reply = await answer(deps, client, { memberId: "U2", question: "How?" });
+    expect(reply.endsWith("You have finished the checklist.")).toBe(true);
+    expect(reply).not.toMatch(BARE_ID);
+    expect(sent[0]?.user).not.toMatch(BARE_ID);
   });
 
   it("asking changes no checklist row (Scenario 4)", async () => {
@@ -103,6 +159,39 @@ describe("question listener", () => {
     const { client } = fake("Do X. [Connect Claude to Slack]");
     await handleQuestion(deps, client, { memberId: "U1", channel: "D1", text: "How do I connect Slack?" });
     expect(deps.fake.last("chat.postMessage").text).toContain("Do X.");
+  });
+});
+
+describe("where is the glossary (FR-AS-009)", () => {
+  const URL = "https://example.slack.com/docs/glossary";
+  for (const text of ["Where is the glossary?", "what is the glossary"]) {
+    it(`"${text}" gets the link and makes no Claude call (Scenario 8)`, async () => {
+      const deps = makeDeps({ glossaryUrl: URL });
+      const { client, sent } = fake("x");
+      await handleQuestion(deps, client, { memberId: "U1", channel: "D1", text });
+      expect(deps.fake.last("chat.postMessage").text).toContain(URL);
+      expect(sent).toHaveLength(0);
+    });
+  }
+  it("says no link is set when the URL is unset, with no Claude call", async () => {
+    const deps = makeDeps();
+    const { client, sent } = fake("x");
+    await handleQuestion(deps, client, { memberId: "U1", channel: "D1", text: "Where is the glossary?" });
+    expect(deps.fake.last("chat.postMessage").text).toContain("No glossary link is set");
+    expect(sent).toHaveLength(0);
+  });
+  it("leaves the term path first and how-to questions with Claude", async () => {
+    const deps = makeDeps({ glossaryUrl: URL });
+    const { client, sent } = fake("Do X. [Connect Claude to Slack]");
+    await handleQuestion(deps, client, { memberId: "U1", channel: "D1", text: "What is an MCP?" });
+    expect(deps.fake.last("chat.postMessage").text).toContain("Model Context Protocol");
+    expect(sent).toHaveLength(0);
+    await handleQuestion(deps, client, { memberId: "U1", channel: "D1", text: "how do I add a skill to my project?" });
+    expect(sent).toHaveLength(1);
+    expect(isGlossaryLocationQuestion("how do I add a skill to my project?")).toBe(false);
+  });
+  it("posts the same string as the first message's link line", () => {
+    expect(firstMessageText(FIXTURE_LIBRARY, URL).split("\n")[0]).toBe(glossaryLink(URL));
   });
 });
 

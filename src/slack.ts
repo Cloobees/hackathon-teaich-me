@@ -8,6 +8,11 @@ export interface SlackClient {
     postMessage(args: { channel: string; text: string; blocks?: Block[]; thread_ts?: string }): Promise<{ ts?: string }>;
     update(args: { channel: string; ts: string; text: string; blocks?: Block[] }): Promise<unknown>;
   };
+  pins: { add(args: { channel: string; timestamp: string }): Promise<unknown> };
+  views: { publish(args: { user_id: string; view: { type: "home"; blocks: Block[] } }): Promise<unknown> };
+  files: {
+    uploadV2(args: { channel_id: string; file: Buffer; filename: string; initial_comment?: string }): Promise<unknown>;
+  };
   users: {
     info(args: { user: string }): Promise<{ user?: { profile?: { email?: string } } }>;
     list(args: { cursor?: string }): Promise<{

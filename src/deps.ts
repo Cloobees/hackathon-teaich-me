@@ -14,4 +14,10 @@ export interface Deps {
   operators: string[];
   /** Link to the glossary canvas (GLOSSARY_CANVAS_URL); omitted from messages when unset. */
   glossaryUrl?: string;
+  /** Channel the member's Claude posts report blocks in (CHECK_CHANNEL_ID); the check button is off when unset. */
+  checkChannelId?: string;
+  /** The paste fallback (REPORT_PASTE_FALLBACK, default off): the check click asks for the block pasted into the DM, and the DM listener reads it. */
+  reportPasteFallback?: boolean;
+  /** Path of the copilot-check zip the copilot attaches (SKILL_ZIP_PATH); sendSkillZip treats an unset path as a missing file. */
+  skillZipPath?: string;
 }

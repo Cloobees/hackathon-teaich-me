@@ -14,6 +14,7 @@
     "seed": "tsx scripts/seed.ts",
     "ask": "tsx scripts/ask.ts",
     "check:library": "tsx scripts/checkLibrary.ts",
+    "check:mocks": "tsx scripts/checkMocks.ts",
     "check:secrets": "tsx scripts/checkSecrets.ts",
     "dashboard": "tsx scripts/dashboard.ts"
   },

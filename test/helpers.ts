@@ -7,6 +7,7 @@ import { handleRole, startOnboarding } from "../src/start.js";
 import type { Role } from "../src/store.js";
 
 export const FIXTURE_LIBRARY = fileURLToPath(new URL("./fixtures/library", import.meta.url));
+export const SKILL_ZIP = fileURLToPath(new URL("../library-files/copilot-check.zip", import.meta.url));
 
 export interface Call {
   method: string;
@@ -20,6 +21,8 @@ export class FakeSlack {
   members: { id?: string; name?: string; real_name?: string; is_bot?: boolean; deleted?: boolean }[] = [];
   failOpen = false;
   failList = false;
+  failUpload = false;
+  failPin = false;
   private ts = 0;
 
   client: SlackClient = {
@@ -37,6 +40,26 @@ export class FakeSlack {
       },
       update: async (args) => {
         this.calls.push({ method: "chat.update", args });
+        return {};
+      },
+    },
+    pins: {
+      add: async (args) => {
+        this.calls.push({ method: "pins.add", args });
+        if (this.failPin) throw new Error("channel_not_found");
+        return {};
+      },
+    },
+    views: {
+      publish: async (args) => {
+        this.calls.push({ method: "views.publish", args });
+        return {};
+      },
+    },
+    files: {
+      uploadV2: async (args) => {
+        this.calls.push({ method: "files.uploadV2", args });
+        if (this.failUpload) throw new Error("upload_failed");
         return {};
       },
     },
@@ -72,6 +95,7 @@ export function makeDeps(overrides: Partial<Deps> = {}): Deps & { fake: FakeSlac
     slack: fake.client,
     items: loadItems(),
     libraryDir: FIXTURE_LIBRARY,
+    skillZipPath: SKILL_ZIP,
     now: clock.now,
     log: (event, fields) => logs.push(JSON.stringify({ event, ...fields })),
     operators: ["UOP1"],
