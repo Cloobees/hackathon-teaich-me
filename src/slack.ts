@@ -3,7 +3,10 @@
 export type Block = Record<string, unknown>;
 
 export interface SlackClient {
-  conversations: { open(args: { users: string }): Promise<{ channel?: { id?: string } }> };
+  conversations: {
+    open(args: { users: string }): Promise<{ channel?: { id?: string } }>;
+    info(args: { channel: string }): Promise<{ channel?: { id?: string; name?: string; is_private?: boolean; is_group?: boolean } }>;
+  };
   chat: {
     postMessage(args: { channel: string; text: string; blocks?: Block[]; thread_ts?: string }): Promise<{ ts?: string }>;
     update(args: { channel: string; ts: string; text: string; blocks?: Block[] }): Promise<unknown>;
@@ -14,7 +17,9 @@ export interface SlackClient {
     uploadV2(args: { channel_id: string; file: Buffer; filename: string; initial_comment?: string }): Promise<unknown>;
   };
   users: {
-    info(args: { user: string }): Promise<{ user?: { profile?: { email?: string } } }>;
+    info(args: { user: string }): Promise<{
+      user?: { real_name?: string; profile?: { email?: string; real_name?: string; display_name?: string } };
+    }>;
     list(args: { cursor?: string }): Promise<{
       members?: { id?: string; name?: string; real_name?: string; is_bot?: boolean; deleted?: boolean }[];
       response_metadata?: { next_cursor?: string };

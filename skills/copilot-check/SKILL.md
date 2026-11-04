@@ -1,33 +1,32 @@
 ---
 name: copilot-check
-description: Prints the COPILOT-REPORT block the Toolchain Copilot asks for in the "add a skill" onboarding step. Use when the user says to run copilot-check with a code.
+description: Checks that Claude can reach the member's Context Builder Personal Workspace from the Claude Project, then posts the COPILOT-REPORT block the Onboarding Copilot reads in the "add a skill to the Project" step. Use when the user asks to run copilot-check.
 ---
-<!-- trust-marker: yellow - 2026-10-23 - claude-session-2026-10-23 - drafted by Claude per DD-VF-007, needs a technical member to review the wording (BP-017) -->
+<!-- trust-marker: yellow - 2026-11-03 - claude-session-2026-11-03 - simplified per D15, BP-081: no code to take; needs a technical member to review the wording -->
 # copilot-check
 
-The Toolchain Copilot gives a member a one-time code. When the member runs this skill with that code, print the block below and nothing else.
+The Onboarding Copilot asks a member to run this skill in their Claude Project. The skill checks Context Builder access through the member's Personal Workspace and posts one short report to the member's Slack channel. The member gives no code.
 
 ## Steps
 
-1. Take the code the user gave you. It is a short string of letters, digits, `-` and `_`. If the user gave no code, ask for it and stop.
-2. Print exactly these four lines, with the code in place of `<code>`. Do not add commentary, a code fence, or any other line.
+1. Check Context Builder access through the member's Personal Workspace: list the scopes with the Context Builder connector and confirm the member's personal scope is there. Run this in the member's Claude Project.
+2. If the check fails, tell the member what failed and stop. Do not post anything.
+3. If the check passes, post exactly these three lines, with nothing else, to the Slack channel the member names. Do not add commentary, a code fence, or any other line, and do not change the lines.
 
 ```
 COPILOT-REPORT v1
 item: I4
-nonce: <code>
 skill: copilot-check
 ```
 
-3. Do not change, shorten or reformat the code. Do not invent a code.
+4. Do not ask the member for a code. If the member has not named a Slack channel, ask which channel and stop.
 
 ## Example
 
-User: "Run the copilot-check skill with the code Qx7-aB_92k"
+User: "Run the copilot-check skill and post the report to onboarding-copilot-ada-lovelace"
 
-Reply:
+Post to that channel:
 
 COPILOT-REPORT v1
 item: I4
-nonce: Qx7-aB_92k
 skill: copilot-check

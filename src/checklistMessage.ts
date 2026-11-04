@@ -1,10 +1,10 @@
 import { createRows, getRows, nextPending, tick, type ChecklistRow, type ItemDef, type TickResult } from "./checklist.js";
 import type { Deps } from "./deps.js";
-import { instructionButtons, itemLabel, REPORT_ITEMS, sendInstruction } from "./instruction.js";
+import { instructionButtons, itemLabel, sendInstruction } from "./instruction.js";
 import type { Block } from "./slack.js";
 import type { Method, Role } from "./store.js";
 
-export { instructionButtons, REPORT_ITEMS };
+export { instructionButtons };
 
 const glossaryLine = (deps: Deps) => (deps.glossaryUrl ? `The glossary canvas: ${deps.glossaryUrl}` : "The glossary explains the Claude terms; ask me what a term means.");
 

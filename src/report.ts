@@ -1,33 +1,38 @@
-import { randomBytes } from "node:crypto";
-import type { Store } from "./store.js";
-
 const SUPPORTED_VERSION = 1;
-export type ReportItem = "I2" | "I4" | "I6";
+export type ReportItem = "I2" | "I3" | "I4" | "I5" | "I6";
+const REPORT_ITEM_IDS: readonly string[] = ["I2", "I3", "I4", "I5", "I6"];
 
 export type Rule =
+  | "channel"
+  | "author"
   | "malformed"
+  | "via-claude"
   | "version"
-  | "nonce-unknown"
-  | "nonce-member"
-  | "item-mismatch"
-  | "nonce-used"
+  | "item"
   | "i2-slug"
   | "i2-activity"
+  | "i3-project"
   | "i4-skill"
+  | "i5-repo"
   | "i6-sites";
 
-export type Validation = { ok: true; item: ReportItem; nonce: string } | { ok: false; rule: Rule; message: string };
+export type Validation = { ok: true; item: ReportItem } | { ok: false; rule: Rule; message: string };
 
 export interface ParsedReport {
   version: number;
   fields: Record<string, string>;
+  /** The message ended with the connector's ` *Sent using* <@...>`, which was removed before the fields were read. */
+  viaClaude: boolean;
+  /** The user id in that mark; the validator accepts it only when it is the Claude app's. */
+  markId?: string;
 }
 
 // The Slack connector appends this to the last line of a message it posts (observed 2026-11-02).
-const CONNECTOR_SUFFIX = /\s*\*Sent using\*\s*<@[A-Z0-9]+>\s*$/;
+const CONNECTOR_SUFFIX = /\s*\*Sent using\*\s*<@([A-Z0-9]+)>\s*$/;
 
-/** Fixed grammar: a `COPILOT-REPORT v<N>` line, then `key: value` lines. Code fences and the connector's trailing "Sent using" are ignored. */
+/** Fixed grammar: a `COPILOT-REPORT v<N>` line, then `key: value` lines. Code fences are ignored; the connector's trailing "Sent using" is removed and reported. */
 export function parseReport(text: string): ParsedReport | undefined {
+  const markId = CONNECTOR_SUFFIX.exec(text)?.[1];
   const lines = text.replace(CONNECTOR_SUFFIX, "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("```"));
   const start = lines.findIndex((l) => /^COPILOT-REPORT v\d+$/.test(l));
   if (start < 0) return undefined;
@@ -37,40 +42,41 @@ export function parseReport(text: string): ParsedReport | undefined {
     if (!match) break;
     fields[match[1] as string] = (match[2] as string).trim();
   }
-  return { version: Number((lines[start] as string).slice("COPILOT-REPORT v".length)), fields };
+  return { version: Number((lines[start] as string).slice("COPILOT-REPORT v".length)), fields, viaClaude: markId !== undefined, markId };
 }
 
 const fail = (rule: Rule, message: string): Validation => ({ ok: false, rule, message });
 
 export interface ValidateContext {
-  memberId: string;
+  /** The caller has matched the message's channel to the member's channel (FR-VF-012). */
+  inMemberChannel: boolean;
+  /** The caller has matched the message author to that member (FR-VF-017). */
+  authorIsMember: boolean;
   memberEmail?: string;
   /** `member.role_chosen_at`: the checklist start for the I2 activity rule (DD-VF-006). */
   roleChosenAt: string | null;
-  now: () => string;
+  /** Slack user id of the Claude app (`claude_app_user_id`); while unknown, no report passes the Claude mark rule. */
+  claudeAppId?: string;
+  /** `owner/name` the I5 `repo` must equal (HARNESS_REPO); unset accepts any non-empty repo. */
+  harnessRepo?: string;
 }
 
 /**
- * The four rules: nonce, item, version, result. Marks the nonce used only when the block is valid.
- * Rule order is the order the member can fix them in.
+ * The rules, in the order the member can fix them: channel, author, Claude mark, version, item, result (Scenario 1).
+ * There is no nonce (DD-VF-014); the caller supplies the channel and author checks.
  */
-export function validateReport(store: Store, text: string, ctx: ValidateContext): Validation {
+export function validateReport(text: string, ctx: ValidateContext): Validation {
+  if (!ctx.inMemberChannel) return fail("channel", "That report was not posted in your own channel, so I did not read it. Post it again in your channel.");
+  if (!ctx.authorIsMember) return fail("author", "That report was posted in another member's channel, so I did not read it. Ask your own Claude to post it in your channel.");
   const report = parseReport(text);
-  const nonce = report?.fields.nonce;
-  const item = report?.fields.item;
-  if (!report || !nonce || !item) return fail("malformed", "That does not look like a COPILOT-REPORT block. Post the block again, unchanged.");
+  if (!report) return fail("malformed", "That does not look like a COPILOT-REPORT block. Post the block again, unchanged.");
+  if (!ctx.claudeAppId || report.markId !== ctx.claudeAppId) return fail("via-claude", "That report was not posted by your Claude through its Slack connector. Ask your Claude to post it, unchanged.");
   if (report.version !== SUPPORTED_VERSION) return fail("version", `This report is version ${report.version}; I only read version ${SUPPORTED_VERSION}.`);
-
-  const row = store.get<{ member_id: string; item_id: string; used_at: string | null }>(
-    "SELECT member_id, item_id, used_at FROM report_nonce WHERE nonce = ?",
-    nonce,
-  );
-  if (!row) return fail("nonce-unknown", "I did not issue that code. Use the check button on the item and post the block with the new code.");
-  if (row.member_id !== ctx.memberId) return fail("nonce-member", "That code was issued to someone else. Use the check button for your own.");
-  if (row.item_id !== item) return fail("item-mismatch", `That code is for ${row.item_id}, but the block says ${item}.`);
-  if (row.used_at) return fail("nonce-used", "That code was already used. Use the check button for a new one.");
-
   const f = report.fields;
+  const item = f.item;
+  if (!item) return fail("malformed", "That does not look like a COPILOT-REPORT block. Post the block again, unchanged.");
+  if (!REPORT_ITEM_IDS.includes(item)) return fail("item", `${item} has no report block. I read reports for I2 to I6.`);
+
   if (item === "I2") {
     const expected = ctx.memberEmail ? `my-workspace@${ctx.memberEmail}`.toLowerCase() : undefined;
     if (!expected || f.scope_slug?.toLowerCase() !== expected) {
@@ -79,53 +85,20 @@ export function validateReport(store: Store, text: string, ctx: ValidateContext)
     const activity = Date.parse(f.last_knowledge_activity ?? "");
     const started = Date.parse(ctx.roleChosenAt ?? "");
     if (Number.isNaN(activity) || Number.isNaN(started) || activity <= started) {
-      return fail("i2-activity", "I see no Context Builder activity since you started. Create a note in Context Builder, then use the check button again.");
+      return fail("i2-activity", "I see no Context Builder activity since you started. Create a note in Context Builder, then ask your Claude to post the report again.");
     }
+  } else if (item === "I3") {
+    if (!f.project_name) return fail("i3-project", "The block names no Claude Project. Set up a Project, then ask your Claude to post the report again.");
   } else if (item === "I4") {
     if (f.skill !== "copilot-check") return fail("i4-skill", "The block does not come from the copilot-check skill.");
-  } else if (item === "I6") {
-    if (!(Number.parseInt(f.site_count ?? "", 10) >= 1)) return fail("i6-sites", "The block shows no Atlassian site. Authorise the Atlassian connector, then use the check button again.");
-  } else {
-    return fail("malformed", `${item} has no report block.`);
+  } else if (item === "I5") {
+    if (!f.repo) return fail("i5-repo", "The block names no repository. Connect GitHub, then ask your Claude to post the report again.");
+    const harness = ctx.harnessRepo?.trim().toLowerCase();
+    if (harness && f.repo.trim().toLowerCase() !== harness) {
+      return fail("i5-repo", "The repository in the block is not the harness repo. Connect GitHub to the harness repo, then ask your Claude to post the report again.");
+    }
+  } else if (!/^\d+$/.test(f.site_count ?? "") || Number.parseInt(f.site_count as string, 10) < 1) {
+    return fail("i6-sites", "The block shows no Atlassian site. Authorise the Atlassian connector, then ask your Claude to post the report again.");
   }
-
-  const claimed = store.run("UPDATE report_nonce SET used_at = ? WHERE nonce = ? AND used_at IS NULL", ctx.now(), nonce);
-  if (!claimed) return fail("nonce-used", "That code was already used. Use the check button for a new one.");
-  return { ok: true, item, nonce };
-}
-
-/** Creates and stores a single-use nonce bound to a member and an item. Every call issues a new one (DD-VF-005). */
-export function issueNonce(store: Store, memberId: string, itemId: string, now: () => string): string {
-  const nonce = randomBytes(9).toString("base64url");
-  store.run("INSERT INTO report_nonce (nonce, member_id, item_id, issued_at) VALUES (?, ?, ?, ?)", nonce, memberId, itemId, now());
-  return nonce;
-}
-
-/**
- * The text a member gives their own Claude. The block it asks for is the one `parseReport` reads.
- * With a channel id, Claude posts the block there through its connector. Without one (the paste fallback, FR-VF-015),
- * Claude gives the block back to the member, who pastes it into the DM with the app.
- */
-export function promptFor(item: ReportItem, nonce: string, checkChannelId?: string): string {
-  const head = `COPILOT-REPORT v1\nitem: ${item}\nnonce: ${nonce}`;
-  const reply = (extra: string) => `Reply with exactly this block, filled in, and nothing else:\n${head}\n${extra}`;
-  const post = checkChannelId
-    ? `Then post that block, unchanged, as a message in the Slack channel with id ${checkChannelId}, using your Slack connector.`
-    : "";
-  switch (item) {
-    case "I2":
-      return [
-        "Use your Context Builder connector. Call list_scopes and find my Personal Workspace: the scope whose slug starts with my-workspace@.",
-        reply("scope_slug: <that slug>\nlast_knowledge_activity: <stats.lastActivityAt.knowledge as ISO-8601 UTC, or null>"),
-        post,
-      ].filter(Boolean).join("\n");
-    case "I4":
-      return [`Run the copilot-check skill with the nonce ${nonce}.`, "It prints a COPILOT-REPORT block. Give me that block unchanged.", post].filter(Boolean).join("\n");
-    case "I6":
-      return [
-        "Use your Atlassian connector. List the Atlassian sites I can access and count them.",
-        reply("site_count: <the number of sites>"),
-        post,
-      ].filter(Boolean).join("\n");
-  }
+  return { ok: true, item: item as ReportItem };
 }

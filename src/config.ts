@@ -35,12 +35,13 @@ export interface CopilotConfig {
   libraryDir: string;
   dashboardPort: number;
   glossaryUrl?: string;
-  checkChannelId?: string;
-  reportPasteFallback: boolean;
   skillZipPath: string;
+  botMention: string;
+  /** `owner/name` the I5 report must name; unset accepts any non-empty repo. */
+  harnessRepo?: string;
 }
 
-/** Settings for the Toolchain Copilot. Throws `missing <NAME>` for the first required variable that is absent. */
+/** Settings for the Onboarding Copilot. Throws `missing <NAME>` for the first required variable that is absent. */
 export function loadCopilotConfig(env: NodeJS.ProcessEnv = process.env): CopilotConfig {
   const need = (name: string): string => {
     const value = env[name]?.trim();
@@ -56,12 +57,11 @@ export function loadCopilotConfig(env: NodeJS.ProcessEnv = process.env): Copilot
     libraryDir: env.LIBRARY_DIR || "library",
     dashboardPort: Number(env.DASHBOARD_PORT) || 3000,
     glossaryUrl: env.GLOSSARY_CANVAS_URL || undefined,
-    // Where the member's Claude posts its report block; optional, the check button says it is not set up without it.
-    checkChannelId: env.CHECK_CHANNEL_ID?.trim() || undefined,
-    // Off unless true or 1 (FR-VF-015, BP-052).
-    reportPasteFallback: ["true", "1"].includes(env.REPORT_PASTE_FALLBACK?.trim().toLowerCase() ?? ""),
     // The copilot-check zip sits in library-files/, beside library/ so the question handler never reads it (FR-AS-011).
     skillZipPath: env.SKILL_ZIP_PATH || "library-files/copilot-check.zip",
+    // Member-visible text for the /invite step; the Slack app is installed as "Onboarding Copilot".
+    botMention: env.BOT_MENTION || "Onboarding Copilot",
+    harnessRepo: env.HARNESS_REPO?.trim() || undefined,
   };
 }
 

@@ -1,4 +1,5 @@
 import { App } from "@slack/bolt";
+import { bindOnFirstMessage, handleMemberJoinedChannel } from "./bindChannel.js";
 import { loadItems } from "./checklist.js";
 import { selectClaudeClient } from "./claudeClient.js";
 import { loadCopilotConfig } from "./config.js";
@@ -9,9 +10,9 @@ import { handleQuestion } from "./questions.js";
 import type { SlackClient } from "./slack.js";
 import { handleOnboard, handleRole, handleTeamJoin } from "./start.js";
 import { openStore, type Role } from "./store.js";
-import { findClaudeAppId, handleAttest, handleChannelMessage, handleChannelReport, handleReportDm, issueReportPrompt } from "./verify.js";
+import { findClaudeAppId, handleAttest, handleChannelMessage, handleChannelReport } from "./verify.js";
 
-// The Toolchain Copilot entry point: Bolt in Socket Mode, the store, and the dashboard on 127.0.0.1.
+// The Onboarding Copilot entry point: Bolt in Socket Mode, the store, and the dashboard on 127.0.0.1.
 // Written against the designs; not yet run against a live Slack workspace (BP-001).
 const config = loadCopilotConfig();
 const store = openStore(config.dbPath);
@@ -26,15 +27,16 @@ const depsFor = (client: unknown): Deps => ({
   items,
   libraryDir: config.libraryDir,
   skillZipPath: config.skillZipPath,
+  botMention: config.botMention,
   now: () => new Date().toISOString(),
   log,
   operators: config.operatorIds,
   glossaryUrl: config.glossaryUrl,
-  checkChannelId: config.checkChannelId,
-  reportPasteFallback: config.reportPasteFallback,
+  harnessRepo: config.harnessRepo,
 });
 
 let claudeAppId: string | undefined;
+let botUserId: string | undefined;
 
 app.command("/onboard", async ({ command, ack, respond, client }) => {
   await ack();
@@ -47,6 +49,12 @@ app.event("team_join", async ({ event, body, client }) => {
   const user = (event as { user: { id: string; is_bot?: boolean } }).user;
   log("team_join", { member: user.id });
   await handleTeamJoin(depsFor(client), { memberId: user.id, isBot: user.is_bot, eventId: (body as { event_id?: string }).event_id });
+});
+
+app.event("member_joined_channel", async ({ event, client }) => {
+  const e = event as { user?: string; channel: string; inviter?: string };
+  const result = await handleMemberJoinedChannel(depsFor(client), { event: e, botUserId });
+  if (result.outcome !== "not_own_join") log("member_joined_channel", { channel: e.channel, outcome: result.outcome });
 });
 
 app.action(/^role_(technical|non-technical)$/, async ({ ack, body, action, client }) => {
@@ -62,30 +70,26 @@ app.action(/^attest_I\d$/, async ({ ack, body, action, client }) => {
   await handleAttest(depsFor(client), (body as { user: { id: string } }).user.id, (action as { value: string }).value);
 });
 
-app.action(/^report_prompt_I\d$/, async ({ ack, body, action, client }) => {
-  await ack();
-  await issueReportPrompt(depsFor(client), (body as { user: { id: string } }).user.id, (action as { value: string }).value);
-});
-
 app.message(async ({ message, client }) => {
   const m = message as { user?: string; text?: string; ts: string; channel: string; channel_type?: string; bot_id?: string; subtype?: string };
   if (m.bot_id || m.subtype || !m.user || !m.text) return;
   const deps = depsFor(client);
   if (m.channel_type === "im") {
-    // Report blocks go to verification; everything else is a question.
-    if (await handleReportDm(deps, { memberId: m.user, channel: m.channel, text: m.text })) return;
     await handleQuestion(deps, claude, { memberId: m.user, channel: m.channel, text: m.text });
     return;
   }
+  // Fallback bind (FR-VF-019) when the join event was not delivered; a no-op for a bound channel or a non-member author.
+  await bindOnFirstMessage(deps, { memberId: m.user, channel: m.channel });
   if (m.text.includes("COPILOT-REPORT")) {
-    // A report block counts only in the check channel; in any other channel it is ignored.
-    if (deps.checkChannelId && m.channel === deps.checkChannelId) await handleChannelReport(deps, { memberId: m.user, text: m.text });
+    // A report block counts only in a member's bound channel; in any other channel it is ignored.
+    await handleChannelReport(deps, { channel: m.channel, user: m.user, text: m.text, ts: m.ts, claudeAppId });
     return;
   }
   await handleChannelMessage(deps, { memberId: m.user, text: m.text, ts: m.ts, claudeAppId });
 });
 
 await app.start();
+botUserId = (await app.client.auth.test()).user_id;
 claudeAppId = await findClaudeAppId({ slack: app.client as unknown as SlackClient, log });
 log("start_up", { socket_mode: true, claude_app_found: Boolean(claudeAppId), dashboard_port: config.dashboardPort });
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createRows, getRows, itemsForRole, loadItems, position, resetAll, resetMember, tick } from "../src/checklist.js";
-import { openStore, type Store } from "../src/store.js";
+import { getReportChannel, openStore, type Store } from "../src/store.js";
 
 const config = loadItems();
 const now = () => "2026-10-26T10:05:00.000Z";
@@ -45,13 +45,15 @@ describe("position (Scenario 12)", () => {
 });
 
 describe("reset (FR-CL-014, Scenario 14)", () => {
-  /** A member with a role, a DM, a posted checklist, a ticked item, a nonce, completion and a refused pin. */
+  /** A member with a role, a DM, a posted checklist, a ticked item, a nonce row, a stored report channel, completion and a refused pin. */
   function started(store: Store, id: string, seeded = 0) {
     store.run(
-      "INSERT INTO member (member_id, role, role_chosen_at, dm_channel_id, checklist_ts, completed_at, pin_refused, seeded) VALUES (?, 'technical', 't', ?, '100.1', 't', 1, ?)",
+      "INSERT INTO member (member_id, role, role_chosen_at, dm_channel_id, checklist_ts, completed_at, pin_refused, seeded, report_channel_name, report_channel_id) VALUES (?, 'technical', 't', ?, '100.1', 't', 1, ?, ?, ?)",
       id,
       `D-${id}`,
       seeded,
+      `onboarding-copilot-${id}`,
+      `G-${id}`,
     );
     createRows(store, config, id, "technical");
     tick(store, config, id, "I1", "observed", "e", now);
@@ -59,17 +61,19 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
   }
   const memberRow = (store: Store, id: string) =>
     store.get<Record<string, unknown>>("SELECT role, role_chosen_at, dm_channel_id, checklist_ts, completed_at, pin_refused FROM member WHERE member_id = ?", id);
+  const channelOf = (store: Store, id: string) => getReportChannel(store, id);
   const rowCount = (store: Store, table: string, id: string) =>
     store.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table} WHERE member_id = ?`, id)?.n;
 
-  it("resetMember clears the member's rows and state but keeps the DM channel", () => {
+  it("resetMember clears the member's rows and state but keeps the DM channel, the stored report channel and the nonce rows", () => {
     const store = openStore(":memory:");
     started(store, "T1");
     started(store, "T2");
     resetMember(store, "T1");
     expect(rowCount(store, "checklist_item", "T1")).toBe(0);
-    expect(rowCount(store, "report_nonce", "T1")).toBe(0);
+    expect(rowCount(store, "report_nonce", "T1")).toBe(1);
     expect(memberRow(store, "T1")).toEqual({ role: null, role_chosen_at: null, dm_channel_id: "D-T1", checklist_ts: null, completed_at: null, pin_refused: null });
+    expect(channelOf(store, "T1")).toEqual({ name: "onboarding-copilot-T1", id: "G-T1" });
     expect(rowCount(store, "checklist_item", "T2")).toBe(7);
     expect(rowCount(store, "report_nonce", "T2")).toBe(1);
   });
@@ -80,6 +84,7 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
     expect(rowCount(store, "checklist_item", "S1")).toBe(7);
     expect(rowCount(store, "report_nonce", "S1")).toBe(1);
     expect(memberRow(store, "S1")).toMatchObject({ role: "technical", checklist_ts: "100.1", completed_at: "t", pin_refused: 1 });
+    expect(channelOf(store, "S1")).toEqual({ name: "onboarding-copilot-S1", id: "G-S1" });
   });
   it("resetAll clears every unseeded member, leaves seeded ones, and returns the count", () => {
     const store = openStore(":memory:");
@@ -89,8 +94,9 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
     expect(resetAll(store)).toBe(2);
     for (const id of ["T1", "T2"]) {
       expect(rowCount(store, "checklist_item", id)).toBe(0);
-      expect(rowCount(store, "report_nonce", id)).toBe(0);
+      expect(rowCount(store, "report_nonce", id)).toBe(1);
       expect(memberRow(store, id)).toMatchObject({ role: null, completed_at: null, pin_refused: null });
+      expect(channelOf(store, id)).toEqual({ name: `onboarding-copilot-${id}`, id: `G-${id}` });
     }
     expect(rowCount(store, "checklist_item", "S1")).toBe(7);
   });

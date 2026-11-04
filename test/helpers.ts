@@ -18,6 +18,10 @@ export interface Call {
 export class FakeSlack {
   calls: Call[] = [];
   emails: Record<string, string> = {};
+  /** users.info names by user id: `real_name` is the top-level field, the other two sit under `profile`. */
+  profiles: Record<string, { real_name?: string; profile_real_name?: string; display_name?: string }> = {};
+  /** conversations.info results by channel id. */
+  channels: Record<string, { name: string; is_private?: boolean }> = {};
   members: { id?: string; name?: string; real_name?: string; is_bot?: boolean; deleted?: boolean }[] = [];
   failOpen = false;
   failList = false;
@@ -31,6 +35,12 @@ export class FakeSlack {
         this.calls.push({ method: "conversations.open", args });
         if (this.failOpen) throw new Error("cannot_dm_bot");
         return { channel: { id: `D-${args.users}` } };
+      },
+      info: async (args) => {
+        this.calls.push({ method: "conversations.info", args });
+        const channel = this.channels[args.channel];
+        if (!channel) throw new Error("channel_not_found");
+        return { channel: { id: args.channel, name: channel.name, is_private: channel.is_private } };
       },
     },
     chat: {
@@ -64,7 +74,15 @@ export class FakeSlack {
       },
     },
     users: {
-      info: async (args) => ({ user: { profile: { email: this.emails[args.user] } } }),
+      info: async (args) => {
+        const names = this.profiles[args.user] ?? {};
+        return {
+          user: {
+            real_name: names.real_name,
+            profile: { email: this.emails[args.user], real_name: names.profile_real_name, display_name: names.display_name },
+          },
+        };
+      },
       list: async () => {
         if (this.failList) throw new Error("ratelimited");
         return { members: this.members };

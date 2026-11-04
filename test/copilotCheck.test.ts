@@ -4,8 +4,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 import { loadLibrary } from "../src/library.js";
-import { issueNonce, validateReport } from "../src/report.js";
-import { openStore } from "../src/store.js";
+import { validateReport } from "../src/report.js";
 
 const skillPath = fileURLToPath(new URL("../skills/copilot-check/SKILL.md", import.meta.url));
 const libraryDir = fileURLToPath(new URL("../library", import.meta.url));
@@ -18,12 +17,20 @@ describe("copilot-check skill (BP-017)", () => {
     expect(parse(front)).toMatchObject({ name: "copilot-check" });
   });
 
-  it("its block, with a test nonce substituted, passes validate_report for I4", () => {
-    const store = openStore(":memory:");
-    const nonce = issueNonce(store, "U1", "I4", () => "2026-10-26T10:00:00Z");
-    const block = ["COPILOT-REPORT v1", "item: I4", "nonce: <code>", "skill: copilot-check"].join("\n").replace("<code>", nonce);
-    expect(text).toContain("COPILOT-REPORT v1\nitem: I4\nnonce: <code>\nskill: copilot-check".replace(/\n/g, text.includes("\r\n") ? "\r\n" : "\n"));
-    expect(validateReport(store, block, { memberId: "U1", roleChosenAt: null, now: () => "2026-10-26T10:05:00Z" })).toMatchObject({ ok: true, item: "I4" });
+  it("its block, with the connector's mark appended, passes validate_report for I4 and carries no nonce or code (BP-081)", () => {
+    const block = ["COPILOT-REPORT v1", "item: I4", "skill: copilot-check"].join("\n") + " *Sent using* <@U0CDESX6B0V>";
+    expect(text.replace(/\r\n/g, "\n")).toContain("COPILOT-REPORT v1\nitem: I4\nskill: copilot-check\n");
+    expect(text).not.toMatch(/nonce/i);
+    expect(text).not.toMatch(/<code>/);
+    expect(validateReport(block, { inMemberChannel: true, authorIsMember: true, roleChosenAt: null, claudeAppId: "U0CDESX6B0V" })).toMatchObject({ ok: true, item: "I4" });
+  });
+
+  it("its description names the Onboarding Copilot and it checks the Personal Workspace and posts to the channel the member names", () => {
+    const front = /^---\n([\s\S]*?)\n---/.exec(text.replace(/\r\n/g, "\n"))?.[1] ?? "";
+    expect((parse(front) as { description: string }).description).toContain("Onboarding Copilot");
+    expect(text).toContain("Personal Workspace");
+    expect(text).toMatch(/Slack channel the member names/);
+    expect(text).toMatch(/Do not ask the member for a code/);
   });
 
   it("the I4 library file is for all roles and names copilot-check", () => {

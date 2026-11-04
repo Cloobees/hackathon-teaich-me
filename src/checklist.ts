@@ -63,8 +63,9 @@ export const getRows = (store: Store, memberId: string): ChecklistRow[] =>
   );
 
 /**
- * Puts a test member back to before the role question (FR-CL-014): no checklist rows, no report nonces, role,
- * checklist message and completion cleared. The DM channel stays, so a restart needs no `conversations.open`.
+ * Puts a test member back to before the role question (FR-CL-014): no checklist rows, role, checklist message and
+ * completion cleared. The DM channel and the stored report channel name and id stay (FR-VF-020); the retired nonce table
+ * is not read or written.
  * A seeded member is never touched. Returns whether the member was cleared.
  */
 export function resetMember(store: Store, memberId: string): boolean {
@@ -76,7 +77,6 @@ export function resetMember(store: Store, memberId: string): boolean {
       ) > 0;
     if (cleared) {
       store.run("DELETE FROM checklist_item WHERE member_id = ?", memberId);
-      store.run("DELETE FROM report_nonce WHERE member_id = ?", memberId);
     }
     return cleared;
   });

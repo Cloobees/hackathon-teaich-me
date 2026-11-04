@@ -1,15 +1,25 @@
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { answer } from "../src/assist.js";
 import type { ClaudeClient } from "../src/claudeClient.js";
 import { checkLibrary, firstMessageText, instructionFor, loadLibrary, parseLibraryFile, roleDefinitions } from "../src/library.js";
 import { FIXTURE_LIBRARY, makeDeps } from "./helpers.js";
 
-const copyFixture = () => {
+const VALID_LIBRARY = fileURLToPath(new URL("./fixtures/library-valid", import.meta.url));
+
+const copyFixture = (from = FIXTURE_LIBRARY) => {
   const dir = mkdtempSync(join(tmpdir(), "lib-"));
-  cpSync(FIXTURE_LIBRARY, dir, { recursive: true });
+  cpSync(from, dir, { recursive: true });
+  return dir;
+};
+
+/** A copy of the valid library with one file rewritten by `edit`. */
+const validWith = (file: string, edit: (text: string) => string) => {
+  const dir = copyFixture(VALID_LIBRARY);
+  writeFileSync(join(dir, file), edit(readFileSync(join(dir, file), "utf8")));
   return dir;
 };
 
@@ -34,6 +44,19 @@ describe("loadLibrary", () => {
     expect(bare.action).toBeUndefined();
     expect(bare.check).toBeUndefined();
   });
+  it("keeps the newlines of a multi-line action, in order, with the fence, and a one-sentence check (FR-AS-012)", () => {
+    const i1 = loadLibrary(FIXTURE_LIBRARY).find((f) => f.item === "I1");
+    const lines = i1?.action?.split("\n") ?? [];
+    expect(lines).toHaveLength(7);
+    expect(lines[0]).toMatch(/^1\. Open Claude/);
+    expect(lines[1]).toMatch(/^2\. Give your own Claude/);
+    expect(lines[2]).toBe("   ```");
+    expect(lines[3]).toContain("{channelName}");
+    expect(lines[4]).toBe("   ```");
+    expect(lines[5]).toContain("/invite {botMention}");
+    expect(lines[6]).toMatch(/^4\. /);
+    expect(i1?.check).not.toContain("\n");
+  });
   it("treats a file with no roles as all", () => {
     expect(parseLibraryFile("x.md", "---\ntitle: T\n---\nbody").roles).toEqual(["all"]);
   });
@@ -57,8 +80,8 @@ describe("checkLibrary", () => {
     writeFileSync(join(dir, "broken.md"), "no front matter here");
     expect(checkLibrary(dir)).toContain("broken.md: no front matter");
   });
-  it("names the first missing required file in the fixture library (I6 is absent)", () => {
-    expect(checkLibrary(FIXTURE_LIBRARY)).toEqual(["missing required file: item I6 for technical"]);
+  it("names the missing required file in the fixture library (I6 is absent)", () => {
+    expect(checkLibrary(FIXTURE_LIBRARY)).toContain("missing required file: item I6 for technical");
   });
   it("flags a token-shaped string", () => {
     const dir = copyFixture();
@@ -81,15 +104,63 @@ describe("checkLibrary", () => {
     const root = mkdtempSync(join(tmpdir(), "lib-"));
     mkdirSync(join(root, "library"));
     mkdirSync(join(root, "library-files"));
-    cpSync(FIXTURE_LIBRARY, join(root, "library"), { recursive: true });
-    writeFileSync(join(root, "library", "i6.md"), "---\ntitle: Connect Atlassian\nroles: technical\nitem: I6\n---\nConnect it.");
+    cpSync(VALID_LIBRARY, join(root, "library"), { recursive: true });
     writeFileSync(join(root, "library-files", "copilot-check.zip"), "zip");
     expect(checkLibrary(join(root, "library"))).toEqual([]);
   });
-  it("passes once I6 exists", () => {
-    const dir = copyFixture();
-    writeFileSync(join(dir, "i6.md"), "---\ntitle: Connect Atlassian\nroles: technical\nitem: I6\n---\nConnect it.");
-    expect(checkLibrary(dir)).toEqual([]);
+  it("passes the valid library of seven item files", () => {
+    expect(checkLibrary(VALID_LIBRARY)).toEqual([]);
+  });
+});
+
+describe("checkLibrary item-file shape (FR-AS-012, D12)", () => {
+  it("fails an I1 file with no {channelName}", () => {
+    const dir = validWith("i1.md", (t) => t.replaceAll("{channelName}", "the channel"));
+    expect(checkLibrary(dir)).toEqual(["i1.md: item I1 action has no {channelName}"]);
+  });
+  it("fails an I1 file with no {botMention}", () => {
+    const dir = validWith("i1.md", (t) => t.replace("{botMention}", "the bot"));
+    expect(checkLibrary(dir)).toEqual(["i1.md: item I1 action has no {botMention}"]);
+  });
+  it("fails an I2 to I6 file with no {channelName}", () => {
+    for (const [file, id] of [["i2.md", "I2"], ["i3.md", "I3"], ["i4.md", "I4"], ["i5.md", "I5"], ["i6.md", "I6"]] as const) {
+      const dir = validWith(file, (t) => t.replaceAll("{channelName}", "the channel"));
+      expect(checkLibrary(dir)).toEqual([`${file}: item ${id} action has no {channelName}`]);
+    }
+  });
+  it("fails an I2 to I6 file with no report block", () => {
+    const dir = validWith("i3.md", (t) => t.replace("COPILOT-REPORT v1\n     item: I3\n     project_name: <your Project name>\n", ""));
+    expect(checkLibrary(dir)).toEqual(["i3.md: item I3 action has no COPILOT-REPORT v1 block with 'item: I3'"]);
+  });
+  it("fails a report block whose item line names another item", () => {
+    const dir = validWith("i5.md", (t) => t.replace("item: I5\n     repo", "item: I4\n     repo"));
+    expect(checkLibrary(dir)).toEqual(["i5.md: item I5 action has no COPILOT-REPORT v1 block with 'item: I5'"]);
+  });
+  it("fails an I7 file that holds a placeholder or a report block", () => {
+    const channel = validWith("i7.md", (t) => t.replace("action: Join the", "action: Join {channelName} the"));
+    expect(checkLibrary(channel)).toEqual(["i7.md: item I7 action must not hold {channelName}"]);
+    const mention = validWith("i7.md", (t) => t.replace("action: Join the", "action: Ask {botMention} the"));
+    expect(checkLibrary(mention)).toEqual(["i7.md: item I7 action must not hold {botMention}"]);
+    const block = validWith("i7.md", (t) => t.replace("action: Join the", "action: COPILOT-REPORT v1 Join the"));
+    expect(checkLibrary(block)).toEqual(["i7.md: item I7 action must not hold COPILOT-REPORT"]);
+  });
+  it("fails an item file with no check", () => {
+    const dir = validWith("i2.md", (t) => t.replace(/^check: .*\n/m, ""));
+    expect(checkLibrary(dir)).toEqual(["i2.md: item I2 has no check"]);
+  });
+  it("fails an item file with no action", () => {
+    const dir = validWith("i7.md", (t) => t.replace(/^action: .*\n/m, ""));
+    expect(checkLibrary(dir)).toEqual(["i7.md: item I7 has no action"]);
+  });
+  it("fails a check that spans lines", () => {
+    const dir = validWith("i7.md", (t) => t.replace(/^check: .*$/m, "check: |\n  first line\n  second line"));
+    expect(checkLibrary(dir)).toEqual(["i7.md: item I7 check is not one line"]);
+  });
+  it("fails when action and check together reach 2800 characters, and passes just under", () => {
+    const action = 'Join the int-sf-ai channel in Slack, then click "I did it" on the checklist.'.length;
+    const withCheck = (n: number) => validWith("i7.md", (t) => t.replace(/^check: .*$/m, `check: ${"x".repeat(n)}`));
+    expect(checkLibrary(withCheck(2799 - action))).toEqual([]);
+    expect(checkLibrary(withCheck(2800 - action))).toEqual(["i7.md: item I7 action and check are 2800 characters, the limit is under 2800"]);
   });
 });
 

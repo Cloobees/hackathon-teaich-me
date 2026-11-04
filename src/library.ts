@@ -8,7 +8,7 @@ export interface LibraryFile {
   title: string;
   roles: ("all" | Role)[];
   item?: string;
-  /** One line each: what the member does, and what the copilot checks (FR-AS-012). */
+  /** What the member does (one or more lines, newlines kept: steps and a fenced prompt) and what the copilot checks (one sentence) (FR-AS-012). */
   action?: string;
   check?: string;
   body: string;
@@ -104,6 +104,37 @@ export function checkLibrary(dir: string): string[] {
   }
   for (const id of ["I5", "I6"]) {
     if (!files.some((f) => f.item === id && f.roles.includes("technical"))) problems.push(`missing required file: item ${id} for technical`);
+  }
+  for (const f of files) if (f.item && /^I[1-7]$/.test(f.item)) problems.push(...itemShapeProblems(f, f.item));
+  return problems;
+}
+
+/** Slack's section limit is 3000 characters; `action` and `check` are posted in one section (FR-AS-012, D12). */
+const ACTION_CHECK_LIMIT = 2800;
+
+/** The item-file shape rules (FR-AS-012, D12), one message per broken rule, each naming the file. */
+function itemShapeProblems(f: LibraryFile, id: string): string[] {
+  const problems: string[] = [];
+  const action = f.action ?? "";
+  if (!f.action) problems.push(`${f.file}: item ${id} has no action`);
+  if (!f.check) problems.push(`${f.file}: item ${id} has no check`);
+  else if (f.check.includes("\n")) problems.push(`${f.file}: item ${id} check is not one line`);
+  if (f.action && f.check && action.length + f.check.length >= ACTION_CHECK_LIMIT) {
+    problems.push(`${f.file}: item ${id} action and check are ${action.length + f.check.length} characters, the limit is under ${ACTION_CHECK_LIMIT}`);
+  }
+  if (!f.action) return problems;
+  const has = (text: string) => action.includes(text);
+  const reportLine = /^\s*item:\s*(\S+)\s*$/m.exec(action)?.[1];
+  const hasReport = /COPILOT-REPORT v1/.test(action);
+  if (id !== "I7" && !has("{channelName}")) problems.push(`${f.file}: item ${id} action has no {channelName}`);
+  if (id === "I1" && !has("{botMention}")) problems.push(`${f.file}: item ${id} action has no {botMention}`);
+  if (id !== "I1" && id !== "I7" && !(hasReport && reportLine === id)) {
+    problems.push(`${f.file}: item ${id} action has no COPILOT-REPORT v1 block with 'item: ${id}'`);
+  }
+  if (id === "I7") {
+    for (const bad of ["{channelName}", "{botMention}", "COPILOT-REPORT"]) {
+      if (has(bad)) problems.push(`${f.file}: item ${id} action must not hold ${bad}`);
+    }
   }
   return problems;
 }

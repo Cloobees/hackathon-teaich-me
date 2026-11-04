@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,12 +11,15 @@ const REAL_LIBRARY = fileURLToPath(new URL("../library", import.meta.url));
 const row = (deps: ReturnType<typeof makeDeps>, id: string) =>
   deps.store.get<{ started_by: string; role: string | null; first_message_ts: string | null }>("SELECT started_by, role, first_message_ts FROM member WHERE member_id = ?", id);
 
+const posts = (deps: ReturnType<typeof makeDeps>) => deps.fake.of("chat.postMessage").map((c) => c.args as { channel: string; text: string; blocks?: { type: string }[] });
+
 describe("/onboard (Scenarios 3 to 5)", () => {
-  it("a member starts themselves: one DM with two buttons and the two role definitions", async () => {
+  it("a member starts themselves: a welcome post, then a role post with two buttons and the two role definitions", async () => {
     const deps = makeDeps();
     const reply = await handleOnboard(deps, { callerId: "U1", text: "" });
     expect(reply).toContain("DM");
     expect(deps.fake.of("conversations.open")).toHaveLength(1);
+    expect(posts(deps)).toHaveLength(2);
     const dm = deps.fake.last("chat.postMessage");
     const blocks = JSON.stringify(dm.blocks);
     expect(blocks).toContain("technical: You work in repositories");
@@ -25,7 +28,7 @@ describe("/onboard (Scenarios 3 to 5)", () => {
     expect(blocks).toContain('"value":"technical"');
     expect(blocks).toContain('"value":"non-technical"');
     expect(row(deps, "U1")?.started_by).toBe("command");
-    expect(row(deps, "U1")?.first_message_ts).toBeTruthy();
+    expect(row(deps, "U1")?.first_message_ts).toBe("100.001");
   });
 
   it("an operator starts a named member", async () => {
@@ -62,7 +65,7 @@ describe("start guards", () => {
     const deps = makeDeps();
     expect(await startOnboarding(deps, { memberId: "U1", startedBy: "event", eventId: "Ev1" })).toBe("sent");
     expect(await startOnboarding(deps, { memberId: "U1", startedBy: "event", eventId: "Ev1" })).toBe("duplicate");
-    expect(deps.fake.of("chat.postMessage")).toHaveLength(1);
+    expect(deps.fake.of("chat.postMessage")).toHaveLength(2);
   });
 
   it("a conversations.open error writes one log line and makes no second attempt", async () => {
@@ -89,7 +92,7 @@ describe("team_join (Scenario 2)", () => {
     const deps = makeDeps();
     await handleTeamJoin(deps, { memberId: "U9", eventId: "Ev9" });
     expect(row(deps, "U9")?.started_by).toBe("event");
-    expect(deps.fake.of("chat.postMessage")).toHaveLength(1);
+    expect(deps.fake.of("chat.postMessage")).toHaveLength(2);
   });
   it("a bot calls nothing", async () => {
     const deps = makeDeps();
@@ -102,27 +105,36 @@ describe("welcome", () => {
   it("holds the glossary link when configured and omits it otherwise (FR-AS-006)", async () => {
     const withLink = makeDeps({ glossaryUrl: "https://example.slack.com/canvas/F1" });
     await startOnboarding(withLink, { memberId: "U1", startedBy: "command" });
-    expect(JSON.stringify(withLink.fake.last("chat.postMessage").blocks)).toContain("https://example.slack.com/canvas/F1");
+    expect(JSON.stringify(posts(withLink)[0]?.blocks)).toContain("https://example.slack.com/canvas/F1");
     const without = makeDeps();
     await startOnboarding(without, { memberId: "U1", startedBy: "command" });
-    expect(JSON.stringify(without.fake.last("chat.postMessage").blocks)).not.toContain("canvas");
+    expect(JSON.stringify(posts(without)[0]?.blocks)).not.toContain("canvas");
   });
 });
 
 describe("first message (FR-ST-008, Scenarios 2, 3, 4 and 6)", () => {
   const URL = "https://example.slack.com/canvas/F1";
   const BODY = "Fixture first message";
-  const dmBlocks = (deps: ReturnType<typeof makeDeps>) => deps.fake.last("chat.postMessage").blocks ?? [];
+  const welcomeBlocks = (deps: ReturnType<typeof makeDeps>) => posts(deps)[0]?.blocks ?? [];
+  const roleBlocks = (deps: ReturnType<typeof makeDeps>) => posts(deps)[1]?.blocks ?? [];
 
-  it("runs glossary link line, body, role question with the two definitions, then one actions block", async () => {
+  it("posts the welcome first (link line, then body, no button), then the role question with the two definitions and one actions block", async () => {
     const deps = makeDeps({ glossaryUrl: URL });
     await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
-    const blocks = dmBlocks(deps);
+    expect(posts(deps)).toHaveLength(2);
+    const welcome = welcomeBlocks(deps);
+    const welcomeJson = JSON.stringify(welcome);
+    expect(welcomeJson.indexOf(URL)).toBeGreaterThan(-1);
+    expect(welcomeJson.indexOf(URL)).toBeLessThan(welcomeJson.indexOf(BODY));
+    expect(welcome.some((b) => b.type === "actions")).toBe(false);
+    expect(welcomeJson).not.toContain("Which describes you better?");
+    expect(welcomeJson).not.toContain('"button"');
+
+    const blocks = roleBlocks(deps);
     const json = JSON.stringify(blocks);
     const at = (needle: string) => json.indexOf(needle);
-    expect(at(URL)).toBeGreaterThan(-1);
-    expect(at(URL)).toBeLessThan(at(BODY));
-    expect(at(BODY)).toBeLessThan(at("Which describes you better?"));
+    expect(json).not.toContain(BODY);
+    expect(json).not.toContain(URL);
     expect(at("Which describes you better?")).toBeLessThan(at("technical: You work in repositories"));
     expect(at("technical: You work in repositories")).toBeLessThan(at('"type":"actions"'));
     expect(blocks.filter((b) => b.type === "actions")).toHaveLength(1);
@@ -133,9 +145,26 @@ describe("first message (FR-ST-008, Scenarios 2, 3, 4 and 6)", () => {
   it("omits the link line when glossaryUrl is unset", async () => {
     const deps = makeDeps();
     await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
-    const json = JSON.stringify(dmBlocks(deps));
+    const json = JSON.stringify(welcomeBlocks(deps));
     expect(json).toContain(BODY);
     expect(json).not.toContain("glossary");
+  });
+
+  it("with no first-message file the welcome holds only the link line, and with no link either it is skipped", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "no-first-message-"));
+    cpSync(FIXTURE_LIBRARY, dir, { recursive: true });
+    rmSync(join(dir, "first-message.md"));
+    const linked = makeDeps({ libraryDir: dir, glossaryUrl: URL });
+    expect(await startOnboarding(linked, { memberId: "U1", startedBy: "command" })).toBe("sent");
+    expect(posts(linked)).toHaveLength(2);
+    expect(JSON.stringify(welcomeBlocks(linked))).toContain(URL);
+    expect(JSON.stringify(welcomeBlocks(linked))).not.toContain(BODY);
+
+    const bare = makeDeps({ libraryDir: dir });
+    expect(await startOnboarding(bare, { memberId: "U1", startedBy: "command" })).toBe("sent");
+    expect(posts(bare)).toHaveLength(1);
+    expect(JSON.stringify(posts(bare)[0]?.blocks)).toContain('"type":"actions"');
+    expect(row(bare, "U1")?.first_message_ts).toBe("100.001");
   });
 
   it("/onboard, /onboard @member and team_join post identical blocks for the same member", async () => {
@@ -146,8 +175,8 @@ describe("first message (FR-ST-008, Scenarios 2, 3, 4 and 6)", () => {
     await handleOnboard(named, { callerId: "UOP1", text: "<@U2|sam>" });
     const joined = makeDeps(options);
     await handleTeamJoin(joined, { memberId: "U2", eventId: "Ev2" });
-    expect(dmBlocks(named)).toEqual(dmBlocks(self));
-    expect(dmBlocks(joined)).toEqual(dmBlocks(self));
+    expect(posts(named)).toEqual(posts(self));
+    expect(posts(joined)).toEqual(posts(self));
     expect([self, named, joined].map((d) => row(d, "U2")?.started_by)).toEqual(["command", "command", "event"]);
   });
 
@@ -156,10 +185,10 @@ describe("first message (FR-ST-008, Scenarios 2, 3, 4 and 6)", () => {
     cpSync(FIXTURE_LIBRARY, dir, { recursive: true });
     const deps = makeDeps({ libraryDir: dir });
     await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
-    expect(JSON.stringify(dmBlocks(deps))).toContain(BODY);
+    expect(JSON.stringify(welcomeBlocks(deps))).toContain(BODY);
     writeFileSync(join(dir, "first-message.md"), ["---", "title: first-message", "roles: all", "---", "Edited between starts.", ""].join("\n"));
     await startOnboarding(deps, { memberId: "U2", startedBy: "command" });
-    const second = JSON.stringify(dmBlocks(deps));
+    const second = JSON.stringify(posts(deps).slice(2));
     expect(second).toContain("Edited between starts.");
     expect(second).not.toContain(BODY);
   });

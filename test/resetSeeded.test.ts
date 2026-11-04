@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getMetrics } from "../src/aggregate.js";
 import { createRows, loadItems, resetAll, resetMember, tick } from "../src/checklist.js";
 import { seedCohort } from "../src/seedCohort.js";
-import { openStore } from "../src/store.js";
+import { getReportChannel, openStore, setReportChannel } from "../src/store.js";
 
 const config = loadItems();
 const now = () => "2026-10-26T10:00:00.000Z";
@@ -35,9 +35,11 @@ describe("reset leaves seeded rows alone (Scenario 9)", () => {
     expect(seededFigures(getMetrics(store, config))).toEqual(figuresBefore);
   });
 
-  it("clears the live member's role and ticks", () => {
+  it("clears the live member's role and ticks but keeps its stored report channel", () => {
     const { store } = setup();
+    setReportChannel(store, "ULIVE", { name: "onboarding-copilot-live", id: "GLIVE" });
     resetAll(store);
+    expect(getReportChannel(store, "ULIVE")).toEqual({ name: "onboarding-copilot-live", id: "GLIVE" });
     expect(store.get("SELECT role FROM member WHERE member_id = 'ULIVE'")).toEqual({ role: null });
     expect(store.all("SELECT * FROM checklist_item WHERE member_id = 'ULIVE'")).toHaveLength(0);
   });

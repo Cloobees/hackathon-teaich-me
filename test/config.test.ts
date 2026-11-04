@@ -18,5 +18,17 @@ describe("loadCopilotConfig", () => {
     expect(config.operatorIds).toEqual(["U1", "U2"]);
     expect(config.dbPath).toBe("state/copilot.db");
     expect(config.glossaryUrl).toBeUndefined();
+    expect(config.botMention).toBe("Onboarding Copilot");
+  });
+  it("reads BOT_MENTION", () => {
+    expect(loadCopilotConfig({ ...full, BOT_MENTION: "Copilot Dev" }).botMention).toBe("Copilot Dev");
+  });
+});
+
+describe("HARNESS_REPO", () => {
+  it("is optional, with no default, and is read trimmed when set", () => {
+    expect(loadCopilotConfig(full).harnessRepo).toBeUndefined();
+    expect(loadCopilotConfig({ ...full, HARNESS_REPO: "" }).harnessRepo).toBeUndefined();
+    expect(loadCopilotConfig({ ...full, HARNESS_REPO: " synechron/harness " }).harnessRepo).toBe("synechron/harness");
   });
 });

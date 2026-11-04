@@ -1,10 +1,26 @@
 import { readFileSync } from "node:fs";
+import { inflateRawSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { sendSkillZip } from "../src/sendSkillZip.js";
 import { makeDeps, onboard } from "./helpers.js";
 
 const realZip = fileURLToPath(new URL("../library-files/copilot-check.zip", import.meta.url));
+
+/** Reads one entry's text out of a zip by walking its local file headers. Handles stored and deflated entries. */
+function zipEntryText(zip: Buffer, name: string): string | undefined {
+  for (let at = 0; at + 30 <= zip.length && zip.readUInt32LE(at) === 0x04034b50; ) {
+    const method = zip.readUInt16LE(at + 8);
+    const size = zip.readUInt32LE(at + 18);
+    const nameLength = zip.readUInt16LE(at + 26);
+    const extraLength = zip.readUInt16LE(at + 28);
+    const start = at + 30 + nameLength + extraLength;
+    const data = zip.subarray(start, start + size);
+    if (zip.toString("utf8", at + 30, at + 30 + nameLength) === name) return (method === 0 ? data : inflateRawSync(data)).toString("utf8");
+    at = start + size;
+  }
+  return undefined;
+}
 
 /** A non-technical member who has chosen a role, so the store holds their dm_channel_id. */
 async function setup(overrides: Parameters<typeof makeDeps>[0] = {}) {
@@ -34,6 +50,13 @@ describe("sendSkillZip (BP-049)", () => {
     expect(bytes.startsWith("PK")).toBe(true);
     expect(bytes).toContain("copilot-check/SKILL.md");
     expect(bytes).not.toContain("copilot-check\SKILL.md");
+  });
+
+  it("the zip's copilot-check/SKILL.md matches skills/copilot-check/SKILL.md and holds no nonce (BP-081)", () => {
+    const folderText = readFileSync(fileURLToPath(new URL("../skills/copilot-check/SKILL.md", import.meta.url)), "utf8");
+    const zipText = zipEntryText(readFileSync(realZip), "copilot-check/SKILL.md");
+    expect(zipText).toBe(folderText);
+    expect(zipText).not.toMatch(/nonce/i);
   });
 
   it("a missing file attaches nothing, sends one DM naming I did it, logs skill_zip_missing and does not throw", async () => {

@@ -36,14 +36,23 @@ export async function startOnboarding(deps: Deps, input: StartInput): Promise<St
   deps.store.run("INSERT OR IGNORE INTO member (member_id, started_by, dm_channel_id) VALUES (?, ?, ?)", memberId, startedBy, dm);
 
   const defs = roleDefinitions(deps.libraryDir);
-  // The first message is read at each start, so an author's edit needs no deploy (FR-AS-008).
-  const first = firstMessageText(deps.libraryDir, deps.glossaryUrl);
+  // The welcome is its own message with no button, posted before the role message (FR-ST-008, DD-ST-010).
+  // It is read at each start, so an author's edit needs no deploy (FR-AS-008). With nothing to say it is skipped.
+  const welcome = firstMessageText(deps.libraryDir, deps.glossaryUrl);
+  let firstTs: string | undefined;
+  if (welcome) {
+    const posted = await deps.slack.chat.postMessage({
+      channel: dm,
+      text: welcome,
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: welcome } }],
+    });
+    firstTs = posted.ts;
+  }
   const question = `Which describes you better?\n• ${defs.technical}\n• ${defs.nonTechnical}`;
-  const posted = await deps.slack.chat.postMessage({
+  const role = await deps.slack.chat.postMessage({
     channel: dm,
-    text: [first, question].filter(Boolean).join("\n\n"),
+    text: question,
     blocks: [
-      ...(first ? [{ type: "section", text: { type: "mrkdwn", text: first } }] : []),
       { type: "section", text: { type: "mrkdwn", text: question } },
       {
         type: "actions",
@@ -54,7 +63,8 @@ export async function startOnboarding(deps: Deps, input: StartInput): Promise<St
       },
     ],
   });
-  if (posted.ts) deps.store.run("UPDATE member SET first_message_ts = ? WHERE member_id = ?", posted.ts, memberId);
+  firstTs ??= role.ts;
+  if (firstTs) deps.store.run("UPDATE member SET first_message_ts = ? WHERE member_id = ?", firstTs, memberId);
   deps.log("start", { member: memberId, started_by: startedBy, outcome: "sent" });
   return "sent";
 }

@@ -16,7 +16,7 @@ The app replies only while this machine is powered, awake, online and signed in.
 
    The query must show the AC setting index `0x00000000`. Copy that line into `.claude/evidence/BP-063/host-run.md`. Keep the lid open or set the lid-close action to Do nothing.
 2. **Claude Code login.** The app calls Claude through the signed-in Claude Code session (`CLAUDE_AUTH=claude-code` in `.env`, A-EN-004). Run `claude` once under the Windows account that will run the app and confirm it is signed in. If the login lapses, every answer fails and the app does not warn at start-up (OQ-EN-012).
-3. **`.env`.** `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `OPERATOR_USER_IDS`, `CHECK_CHANNEL_ID` and `CLAUDE_AUTH` are set. Values stay in `.env`, never here.
+3. **`.env`.** `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `OPERATOR_USER_IDS` and `CLAUDE_AUTH` are set. Values stay in `.env`, never here.
 4. **Seed.** `npm run seed` once, so the dashboard shows the seeded cohort.
 
 ## Start and restart

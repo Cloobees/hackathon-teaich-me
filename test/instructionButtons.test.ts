@@ -6,7 +6,7 @@ type Button = { type: string; action_id: string; value: string; confirm?: Record
 const ITEMS = makeDeps().items.items;
 const ids = (item: (typeof ITEMS)[number]) => (instructionButtons(item) as Button[]).map((b) => b.action_id);
 
-describe("instructionButtons (FR-VF-001, FR-VF-002, FR-VF-004, FR-VF-011)", () => {
+describe("instructionButtons (FR-VF-001, FR-VF-002, FR-VF-011)", () => {
   it("gives every item I1 to I7 an I did it button with a confirm object and action_id attest_<id>", () => {
     expect(ITEMS.map((i) => i.id)).toEqual(["I1", "I2", "I3", "I4", "I5", "I6", "I7"]);
     for (const item of ITEMS) {
@@ -16,11 +16,8 @@ describe("instructionButtons (FR-VF-001, FR-VF-002, FR-VF-004, FR-VF-011)", () =
     }
   });
 
-  it("gives a check button report_prompt_<id> to I2, I4 and I6 and to no other item", () => {
-    for (const item of ITEMS) {
-      expect(ids(item).filter((a) => a.startsWith("report_prompt_"))).toEqual(["I2", "I4", "I6"].includes(item.id) ? [`report_prompt_${item.id}`] : []);
-    }
-    expect(ids(ITEMS.find((i) => i.id === "I2") as (typeof ITEMS)[number])).toEqual(["attest_I2", "report_prompt_I2"]);
+  it("gives every item exactly one button, I did it, and no check button on I2, I4 or I6 (FR-VF-001)", () => {
+    for (const item of ITEMS) expect(ids(item), item.id).toEqual([`attest_${item.id}`]);
   });
 
   it("a posted instruction message carries the buttons for its item, in an actions block", async () => {

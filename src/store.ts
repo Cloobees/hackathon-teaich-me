@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS member (
   checklist_ts TEXT,
   completed_at TEXT,
   seeded INTEGER NOT NULL DEFAULT 0,
-  pin_refused INTEGER
+  pin_refused INTEGER,
+  report_channel_name TEXT,
+  report_channel_id TEXT
 );
 CREATE TABLE IF NOT EXISTS checklist_item (
   member_id TEXT NOT NULL,
@@ -81,6 +83,10 @@ export function openStore(path: string): Store {
   // CREATE TABLE IF NOT EXISTS leaves a file made before pin_refused existed without the column (FR-CL-014).
   const columns = (db.prepare("PRAGMA table_info(member)").all() as { name: string }[]).map((c) => c.name);
   if (!columns.includes("pin_refused")) db.exec("ALTER TABLE member ADD COLUMN pin_refused INTEGER");
+  // The same for the member's report channel columns (FR-VF-018, FR-VF-019).
+  for (const column of ["report_channel_name", "report_channel_id"]) {
+    if (!columns.includes(column)) db.exec(`ALTER TABLE member ADD COLUMN ${column} TEXT`);
+  }
   // A file made before the first message was renamed from the welcome keeps its rows (FR-ST-008).
   if (columns.includes("welcome_ts")) db.exec("ALTER TABLE member RENAME COLUMN welcome_ts TO first_message_ts");
   return {
@@ -100,4 +106,27 @@ export function openStore(path: string): Store {
     },
     close: () => db.close(),
   };
+}
+
+export interface ReportChannel {
+  name: string | null;
+  id: string | null;
+}
+
+/** Stores the member's report channel name (set at the I1 instruction) and/or id (set at the bind); a field left out is kept. */
+export function setReportChannel(store: Store, memberId: string, channel: { name?: string; id?: string }): void {
+  store.run(
+    "UPDATE member SET report_channel_name = COALESCE(?, report_channel_name), report_channel_id = COALESCE(?, report_channel_id) WHERE member_id = ?",
+    channel.name ?? null,
+    channel.id ?? null,
+    memberId,
+  );
+}
+
+export function getReportChannel(store: Store, memberId: string): ReportChannel | undefined {
+  const row = store.get<{ report_channel_name: string | null; report_channel_id: string | null }>(
+    "SELECT report_channel_name, report_channel_id FROM member WHERE member_id = ?",
+    memberId,
+  );
+  return row && { name: row.report_channel_name, id: row.report_channel_id };
 }

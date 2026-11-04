@@ -1,19 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { handleReset } from "../src/reset.js";
 import { handleOnboard, RESET_OPERATOR_ONLY } from "../src/start.js";
+import { getReportChannel, setReportChannel } from "../src/store.js";
 import { makeDeps, onboard } from "./helpers.js";
 
 type Deps = ReturnType<typeof makeDeps>;
 
-/** Every row of the three state tables, so "unchanged" means byte-identical. */
+/** Every row of the state tables (the retired nonce table included), so "unchanged" means byte-identical. */
 const snapshot = (deps: Deps) =>
   JSON.stringify(["member", "checklist_item", "report_nonce"].map((t) => deps.store.all(`SELECT * FROM ${t} ORDER BY 1, 2`)));
 
-/** A ticked test member (U2) and a seeded member (S1). */
+/** A ticked test member (U2) with a stored report channel, and a seeded member (S1). */
 async function seed(deps: Deps): Promise<void> {
   await onboard(deps, "U2", "technical");
   deps.store.run("UPDATE checklist_item SET status = 'done', method = 'self', ticked_at = ? WHERE member_id = 'U2' AND item_id = 'I1'", deps.now());
   deps.store.run("INSERT INTO report_nonce (nonce, member_id, item_id, issued_at) VALUES ('n1', 'U2', 'I2', ?)", deps.now());
+  setReportChannel(deps.store, "U2", { name: "onboarding-copilot-sam", id: "G2" });
   deps.store.run("INSERT INTO member (member_id, role, seeded) VALUES ('S1', 'technical', 1)");
 }
 
@@ -47,7 +49,7 @@ describe("reset by an operator", () => {
     expect(snapshot(deps)).toBe(before);
   });
 
-  it("`/onboard reset @member` clears a ticked member, keeps the DM channel, and tells nobody else (Scenario 8)", async () => {
+  it("`/onboard reset @member` clears a ticked member, keeps the DM channel and report channel, and tells nobody else (Scenario 8)", async () => {
     const deps = makeDeps();
     await seed(deps);
     deps.store.run("UPDATE member SET completed_at = ? WHERE member_id = 'U2'", deps.now());
@@ -63,7 +65,8 @@ describe("reset by an operator", () => {
     expect(reply).not.toMatch(/I[1-9]/);
     expect(row()).toMatchObject({ role: null, completed_at: null, checklist_ts: null, dm_channel_id: "D-U2" });
     expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id = 'U2'")).toHaveLength(0);
-    expect(deps.store.all("SELECT 1 FROM report_nonce WHERE member_id = 'U2'")).toHaveLength(0);
+    expect(deps.store.all("SELECT 1 FROM report_nonce WHERE member_id = 'U2'")).toHaveLength(1);
+    expect(getReportChannel(deps.store, "U2")).toEqual({ name: "onboarding-copilot-sam", id: "G2" });
     expect(JSON.stringify(deps.store.all("SELECT * FROM member WHERE member_id = 'S1'"))).toBe(seededBefore);
     expect(deps.fake.calls).toHaveLength(calls);
   });
@@ -74,7 +77,7 @@ describe("reset by an operator", () => {
     await handleReset(deps, { callerId: "UOP1", text: "reset <@U2|sam>" });
     const posts = deps.fake.of("chat.postMessage").length;
     await handleOnboard(deps, { callerId: "U2", text: "" });
-    expect(deps.fake.of("chat.postMessage")).toHaveLength(posts + 1);
+    expect(deps.fake.of("chat.postMessage")).toHaveLength(posts + 2);
     const message = deps.fake.last("chat.postMessage");
     expect(message.channel).toBe("D-U2");
     expect(JSON.stringify(message.blocks)).toContain("role_technical");
@@ -87,6 +90,7 @@ describe("reset by an operator", () => {
     await onboard(deps, "U2", "technical");
     await onboard(deps, "U3", "non-technical");
     await onboard(deps, "U4", "technical");
+    setReportChannel(deps.store, "U3", { name: "onboarding-copilot-u3", id: "G3" });
     for (let i = 1; i <= 20; i++) deps.store.run("INSERT INTO member (member_id, role, seeded) VALUES (?, 'technical', 1)", `S${i}`);
     const seededCount = () => deps.store.get<{ n: number }>("SELECT COUNT(*) AS n FROM member WHERE seeded = 1")?.n;
     const seededRows = () => JSON.stringify(deps.store.all("SELECT * FROM member WHERE seeded = 1 ORDER BY member_id"));
@@ -101,6 +105,7 @@ describe("reset by an operator", () => {
     expect(seededRows()).toBe(seededBefore);
     expect(deps.store.all("SELECT 1 FROM member WHERE seeded = 0 AND (role IS NOT NULL OR checklist_ts IS NOT NULL OR completed_at IS NOT NULL)")).toHaveLength(0);
     expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id IN ('U2', 'U3', 'U4')")).toHaveLength(0);
+    expect(getReportChannel(deps.store, "U3")).toEqual({ name: "onboarding-copilot-u3", id: "G3" });
     expect(deps.fake.calls).toHaveLength(calls);
   });
 

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyTick, renderChecklist } from "../src/checklistMessage.js";
 import { getRows, itemsForRole } from "../src/checklist.js";
-import { issueReportPrompt } from "../src/verify.js";
 import { makeDeps, onboard, type Call } from "./helpers.js";
 
 const text = (blocks: unknown[] | undefined) => JSON.stringify(blocks);
@@ -183,12 +182,8 @@ describe("checklist message", () => {
   ] as const)("a full %s run leaves no item id in any message or block text (Scenario 12)", async (role, ids) => {
     const deps = makeDeps({ glossaryUrl: "https://example.slack.com/canvas/F1" });
     await onboard(deps, "U1", role);
-    await issueReportPrompt(deps, "U1", "I2");
     await applyTick(deps, "U1", "I4", "self-attested", null);
-    for (const id of ids) {
-      await applyTick(deps, "U1", id, "self-attested", null);
-      if (id === "I1") await issueReportPrompt(deps, "U1", "I2");
-    }
+    for (const id of ids) await applyTick(deps, "U1", id, "self-attested", null);
 
     const seen = messages(deps.fake.calls);
     expect(seen.length).toBeGreaterThan(ids.length);
