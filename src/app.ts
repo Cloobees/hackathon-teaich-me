@@ -39,9 +39,9 @@ const depsFor = (client: unknown): Deps => ({
 let claudeAppId: string | undefined;
 let botUserId: string | undefined;
 
-app.command("/onboard", async ({ command, ack, respond, client }) => {
+app.command("/onboard-ch", async ({ command, ack, respond, client }) => {
   await ack();
-  log("command", { command: "/onboard", member: command.user_id });
+  log("command", { command: "/onboard-ch", member: command.user_id });
   const text = await handleOnboard(depsFor(client), { callerId: command.user_id, text: command.text, triggerId: command.trigger_id });
   await respond({ response_type: "ephemeral", text });
 });

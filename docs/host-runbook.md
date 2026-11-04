@@ -21,15 +21,15 @@ The app replies only while this machine is powered, awake, online and signed in.
 
 ## Start and restart
 
-Start by hand: `npm start` from `hackathon-teaich-me`. A healthy start logs a `start_up` line with `socket_mode: true` and a `dashboard` line with `http://127.0.0.1:<port>/`.
+Start by hand: `npm start` from `hackathon-teaich-me-channel`. A healthy start logs a `start_up` line with `socket_mode: true` and a `dashboard` line with `http://127.0.0.1:<port>/`.
 
 For restart after a crash or reboot, register a scheduled task that starts at boot and restarts on failure. Run once in an elevated PowerShell, changing the account name:
 
 ```powershell
-$action  = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c cd /d `"C:\Cursor Repository\Hackathon\hackathon-teaich-me`" && npm start >> state\host.log 2>&1"
+$action  = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c cd /d `"C:\Cursor Repository\Hackathon\hackathon-teaich-me-channel`" && npm start >> state\host.log 2>&1"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User "<your Windows account>"
 $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName "ToolchainCopilot" -Action $action -Trigger $trigger -Settings $settings
+Register-ScheduledTask -TaskName "OnboardingCopilotChannel" -Action $action -Trigger $trigger -Settings $settings
 ```
 
 The task starts at log-on, not at boot, because the Claude Code login belongs to the signed-in account. Windows must therefore log on after a reboot (set automatic sign-in, or sign in by hand). `pm2` is the alternative the spec names; this runbook uses the scheduled task because it needs no install.

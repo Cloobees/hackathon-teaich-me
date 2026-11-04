@@ -1,5 +1,5 @@
 display_information:
-  name: Onboarding Copilot
+  name: Onboarding Copilot Channel
   description: Walks a new practice member through Slack, Claude and Context Builder setup.
 features:
   app_home:
@@ -7,10 +7,10 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
-    display_name: onboarding-copilot
+    display_name: onboarding-copilot-channel
     always_online: true
   slash_commands:
-    - command: /onboard
+    - command: /onboard-ch
       description: Start your onboarding checklist
       should_escape: true
       usage_hint: "[@member, operators only]"
