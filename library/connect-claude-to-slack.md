@@ -9,6 +9,7 @@ action: |
      Using your Slack connector, create a private Slack channel named {channelName}. If a channel with that name already exists, use it.
      ```
   3. In that channel in Slack, send this message: /invite {botMention}
+     If Slack does not find the app, open the channel name at the top, choose *Integrations*, then *Add apps*, and add Onboarding Copilot.
   4. Once the Onboarding Copilot has confirmed it is in the channel, tell your Claude to send a welcome message to {channelName}.
 check: I will tick this step when I see the message from Claude. If I do not, click I did it and confirm.
 ---

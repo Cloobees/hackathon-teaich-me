@@ -18,7 +18,7 @@ describe("loadCopilotConfig", () => {
     expect(config.operatorIds).toEqual(["U1", "U2"]);
     expect(config.dbPath).toBe("state/copilot.db");
     expect(config.glossaryUrl).toBeUndefined();
-    expect(config.botMention).toBe("Onboarding Copilot");
+    expect(config.botMention).toBe("@onboarding-copilot");
   });
   it("reads BOT_MENTION", () => {
     expect(loadCopilotConfig({ ...full, BOT_MENTION: "Copilot Dev" }).botMention).toBe("Copilot Dev");

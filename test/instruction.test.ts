@@ -195,7 +195,7 @@ describe("instruction placeholders and channel name (FR-CL-013, FR-VF-004, FR-VF
     const deps = makeDeps();
     deps.fake.profiles.U1 = { profile_real_name: "Ana Díaz" };
     await onboard(deps, "U1", "technical");
-    expect(first(deps)).toContain("/invite Onboarding Copilot");
+    expect(first(deps)).toContain("/invite @onboarding-copilot");
     expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-ana-diaz");
   });
 
@@ -274,7 +274,7 @@ describe("instruction action and check lines (FR-CL-013, Scenario 13)", () => {
         expect(file.action, `${id} fixture has an action`).toBeTruthy();
         const text = String(deps.fake.of("chat.postMessage").at(-1)?.args.text);
         const lines = linesOf(deps.fake.of("chat.postMessage").at(-1));
-        const action = file.action?.replaceAll("{channelName}", "onboarding-copilot-u1").replaceAll("{botMention}", "Onboarding Copilot");
+        const action = file.action?.replaceAll("{channelName}", "onboarding-copilot-u1").replaceAll("{botMention}", "@onboarding-copilot");
         expect(text).toContain(`${ACTION}${action}\n`);
         if (file.check) {
           expect(lines).toContain(`${CHECK}${file.check}`);

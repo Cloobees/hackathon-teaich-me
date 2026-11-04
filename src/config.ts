@@ -27,6 +27,8 @@ export function loadSlackConfig() {
   };
 }
 
+export const DEFAULT_BOT_MENTION = "@onboarding-copilot";
+
 export interface CopilotConfig {
   botToken: string;
   appToken: string;
@@ -59,8 +61,9 @@ export function loadCopilotConfig(env: NodeJS.ProcessEnv = process.env): Copilot
     glossaryUrl: env.GLOSSARY_CANVAS_URL || undefined,
     // The copilot-check zip sits in library-files/, beside library/ so the question handler never reads it (FR-AS-011).
     skillZipPath: env.SKILL_ZIP_PATH || "library-files/copilot-check.zip",
-    // Member-visible text for the /invite step; the Slack app is installed as "Onboarding Copilot".
-    botMention: env.BOT_MENTION || "Onboarding Copilot",
+    // Member-visible text for the /invite step. /invite resolves an @handle, not a display name with a space, so this is
+    // the bot user's display_name from the manifest (onboarding-copilot).
+    botMention: env.BOT_MENTION || DEFAULT_BOT_MENTION,
     harnessRepo: env.HARNESS_REPO?.trim() || undefined,
   };
 }

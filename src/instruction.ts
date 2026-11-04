@@ -55,7 +55,7 @@ export function instructionText(deps: Deps, item: ItemDef, role: Role, channel =
     const file = instructionFor(deps.libraryDir, item.id, role);
     if (file?.action) {
       const check = file.check ? `*I check:* ${file.check}` : "*You confirm:* I cannot check this step, so click *I did it* when you have done it.";
-      return fill(`*Do this:* ${file.action}\n${check}`, { channelName: channel, botMention: deps.botMention ?? "Onboarding Copilot" });
+      return fill(`*Do this:* ${file.action}\n${check}`, { channelName: channel, botMention: deps.botMention ?? "@onboarding-copilot" });
     }
     const text = file?.body;
     if (text) return text.length > MAX_INSTRUCTION ? `${text.slice(0, MAX_INSTRUCTION)}...` : text;
