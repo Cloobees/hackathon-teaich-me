@@ -21,12 +21,23 @@ export class FakeSlack {
   /** users.info names by user id: `real_name` is the top-level field, the other two sit under `profile`. */
   profiles: Record<string, { real_name?: string; profile_real_name?: string; display_name?: string }> = {};
   /** conversations.info results by channel id. */
-  channels: Record<string, { name: string; is_private?: boolean }> = {};
+  channels: Record<string, { name: string; is_private?: boolean; is_archived?: boolean }> = {};
   members: { id?: string; name?: string; real_name?: string; is_bot?: boolean; deleted?: boolean }[] = [];
   failOpen = false;
   failList = false;
   failUpload = false;
   failPin = false;
+  failCreate = false;
+  failInvite = false;
+  failCanvas = false;
+  /** Channel names that make conversations.create throw `name_taken` once each. */
+  nameTaken: string[] = [];
+  /** Channels made by conversations.create, in order. */
+  created: { id: string; name: string }[] = [];
+  /** Canvas ids by channel id. */
+  canvases: Record<string, string> = {};
+  private channelSeq = 0;
+  private canvasSeq = 0;
   private ts = 0;
 
   client: SlackClient = {
@@ -40,7 +51,34 @@ export class FakeSlack {
         this.calls.push({ method: "conversations.info", args });
         const channel = this.channels[args.channel];
         if (!channel) throw new Error("channel_not_found");
-        return { channel: { id: args.channel, name: channel.name, is_private: channel.is_private } };
+        return { channel: { id: args.channel, name: channel.name, is_private: channel.is_private, is_archived: channel.is_archived } };
+      },
+      create: async (args) => {
+        this.calls.push({ method: "conversations.create", args });
+        if (this.failCreate) throw new Error("restricted_action");
+        const taken = this.nameTaken.indexOf(args.name);
+        if (taken >= 0) {
+          this.nameTaken.splice(taken, 1);
+          throw new Error("name_taken");
+        }
+        const channel = { id: `C-${++this.channelSeq}`, name: args.name };
+        this.created.push(channel);
+        return { channel };
+      },
+      invite: async (args) => {
+        this.calls.push({ method: "conversations.invite", args });
+        if (this.failInvite) throw new Error("user_is_restricted");
+        return {};
+      },
+      canvases: {
+        create: async (args) => {
+          this.calls.push({ method: "conversations.canvases.create", args });
+          if (this.failCanvas) throw new Error("canvas_disabled_for_team");
+          if (this.canvases[args.channel_id]) throw new Error("channel_canvas_already_exists");
+          const canvasId = `F-${++this.canvasSeq}`;
+          this.canvases[args.channel_id] = canvasId;
+          return { canvas_id: canvasId };
+        },
       },
     },
     chat: {
@@ -50,6 +88,20 @@ export class FakeSlack {
       },
       update: async (args) => {
         this.calls.push({ method: "chat.update", args });
+        return {};
+      },
+    },
+    canvases: {
+      sections: {
+        lookup: async (args) => {
+          this.calls.push({ method: "canvases.sections.lookup", args });
+          if (this.failCanvas) throw new Error("canvas_disabled_for_team");
+          return { sections: [{ id: "temp:C:1" }] };
+        },
+      },
+      edit: async (args) => {
+        this.calls.push({ method: "canvases.edit", args });
+        if (this.failCanvas) throw new Error("canvas_disabled_for_team");
         return {};
       },
     },

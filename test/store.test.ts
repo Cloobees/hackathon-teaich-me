@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { getReportChannel, openStore, setReportChannel } from "../src/store.js";
+import { getMemberChannel, getReportChannel, openStore, setMemberChannel, setReportChannel } from "../src/store.js";
 
 describe("store", () => {
   it("creates the tables and views, and keeps rows across a reopen", () => {
@@ -99,5 +99,54 @@ describe("store", () => {
     setReportChannel(store, "U1", { name: "onboarding-copilot-ann-3" });
     expect(getReportChannel(store, "U1")).toEqual({ name: "onboarding-copilot-ann-3", id: "G1" });
     expect(getReportChannel(store, "UNKNOWN")).toBeUndefined();
+  });
+  it("member has the channel columns (FR-CH-025)", () => {
+    const store = openStore(":memory:");
+    const cols = store.all<{ name: string }>("PRAGMA table_info(member)").map((c) => c.name);
+    expect(cols).toEqual(expect.arrayContaining(["channel_id", "channel_name", "channel_state", "checklist_canvas_id", "canvas_surface"]));
+  });
+  it("copies the report channel into the channel columns of an old-schema file, keeps old columns, and is idempotent (Scenario 27)", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "store-")), "old.db");
+    const old = new DatabaseSync(path);
+    old.exec(`CREATE TABLE member (
+      member_id TEXT PRIMARY KEY, role TEXT, role_chosen_at TEXT, started_by TEXT, dm_channel_id TEXT,
+      first_message_ts TEXT, checklist_ts TEXT, completed_at TEXT, seeded INTEGER NOT NULL DEFAULT 0, pin_refused INTEGER,
+      report_channel_name TEXT, report_channel_id TEXT
+    )`);
+    old.exec("INSERT INTO member (member_id, role, dm_channel_id, report_channel_name, report_channel_id) VALUES ('U1', 'technical', 'D1', 'onboarding-copilot-ann', 'G1')");
+    old.exec("INSERT INTO member (member_id, role, report_channel_name) VALUES ('U2', 'technical', 'onboarding-copilot-bob')");
+    old.exec("INSERT INTO member (member_id, role) VALUES ('U3', 'non-technical')");
+    old.close();
+
+    const store = openStore(path);
+    expect(getMemberChannel(store, "U1")).toEqual({ id: "G1", name: "onboarding-copilot-ann", state: "active" });
+    expect(getMemberChannel(store, "U2")).toEqual({ id: null, name: null, state: null });
+    expect(getMemberChannel(store, "U3")).toEqual({ id: null, name: null, state: null });
+    expect(getReportChannel(store, "U1")).toEqual({ name: "onboarding-copilot-ann", id: "G1" });
+    expect(store.get("SELECT role, dm_channel_id FROM member WHERE member_id = 'U1'")).toMatchObject({ role: "technical", dm_channel_id: "D1" });
+    setMemberChannel(store, "U1", { id: "C-9", name: "onboarding-copilot-ann-2", state: "lost" });
+    store.close();
+
+    const again = openStore(path);
+    expect(getMemberChannel(again, "U1")).toEqual({ id: "C-9", name: "onboarding-copilot-ann-2", state: "lost" });
+    expect(again.all("SELECT member_id FROM member")).toHaveLength(3);
+    again.close();
+  });
+  it("loads a seeded row with null channel columns", () => {
+    const store = openStore(":memory:");
+    store.run("INSERT INTO member (member_id, role, seeded, completed_at) VALUES ('S1', 'technical', 1, '2026-10-20T10:00:00.000Z')");
+    expect(getMemberChannel(store, "S1")).toEqual({ id: null, name: null, state: null });
+    expect(store.get("SELECT checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'S1'")).toEqual({ checklist_canvas_id: null, canvas_surface: null });
+    expect(store.all("SELECT * FROM v_started_completed")).toHaveLength(1);
+  });
+  it("stores and reads the member channel, and returns undefined for an unknown member", () => {
+    const store = openStore(":memory:");
+    store.run("INSERT INTO member (member_id) VALUES ('U1')");
+    expect(getMemberChannel(store, "U1")).toEqual({ id: null, name: null, state: null });
+    setMemberChannel(store, "U1", { id: "C-1", name: "onboarding-copilot-ann", state: "active" });
+    expect(getMemberChannel(store, "U1")).toEqual({ id: "C-1", name: "onboarding-copilot-ann", state: "active" });
+    setMemberChannel(store, "U1", { id: "C-1", name: "onboarding-copilot-ann", state: "member_left" });
+    expect(getMemberChannel(store, "U1")?.state).toBe("member_left");
+    expect(getMemberChannel(store, "UNKNOWN")).toBeUndefined();
   });
 });

@@ -30,7 +30,12 @@ CREATE TABLE IF NOT EXISTS member (
   seeded INTEGER NOT NULL DEFAULT 0,
   pin_refused INTEGER,
   report_channel_name TEXT,
-  report_channel_id TEXT
+  report_channel_id TEXT,
+  channel_id TEXT,
+  channel_name TEXT,
+  channel_state TEXT,
+  checklist_canvas_id TEXT,
+  canvas_surface TEXT
 );
 CREATE TABLE IF NOT EXISTS checklist_item (
   member_id TEXT NOT NULL,
@@ -87,6 +92,14 @@ export function openStore(path: string): Store {
   for (const column of ["report_channel_name", "report_channel_id"]) {
     if (!columns.includes(column)) db.exec(`ALTER TABLE member ADD COLUMN ${column} TEXT`);
   }
+  // The member's channel columns (FR-CH-025). Each is added only when missing, so a reopen changes nothing.
+  for (const column of ["channel_id", "channel_name", "channel_state", "checklist_canvas_id", "canvas_surface"]) {
+    if (!columns.includes(column)) db.exec(`ALTER TABLE member ADD COLUMN ${column} TEXT`);
+  }
+  // Copy the report channel into the new columns once; a row that already has a channel_id is left alone.
+  db.exec(
+    "UPDATE member SET channel_id = report_channel_id, channel_name = report_channel_name, channel_state = 'active' WHERE channel_id IS NULL AND report_channel_id IS NOT NULL",
+  );
   // A file made before the first message was renamed from the welcome keeps its rows (FR-ST-008).
   if (columns.includes("welcome_ts")) db.exec("ALTER TABLE member RENAME COLUMN welcome_ts TO first_message_ts");
   return {
@@ -129,4 +142,25 @@ export function getReportChannel(store: Store, memberId: string): ReportChannel 
     memberId,
   );
   return row && { name: row.report_channel_name, id: row.report_channel_id };
+}
+
+export type ChannelState = "active" | "member_left" | "invite_failed" | "lost";
+
+export interface MemberChannel {
+  id: string | null;
+  name: string | null;
+  state: ChannelState | null;
+}
+
+/** Stores the member's channel id, name and state together; the row must exist. */
+export function setMemberChannel(store: Store, memberId: string, channel: { id: string | null; name: string | null; state: ChannelState }): void {
+  store.run("UPDATE member SET channel_id = ?, channel_name = ?, channel_state = ? WHERE member_id = ?", channel.id, channel.name, channel.state, memberId);
+}
+
+export function getMemberChannel(store: Store, memberId: string): MemberChannel | undefined {
+  const row = store.get<{ channel_id: string | null; channel_name: string | null; channel_state: ChannelState | null }>(
+    "SELECT channel_id, channel_name, channel_state FROM member WHERE member_id = ?",
+    memberId,
+  );
+  return row && { id: row.channel_id, name: row.channel_name, state: row.channel_state };
 }
