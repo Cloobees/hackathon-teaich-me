@@ -151,6 +151,24 @@ describe("store", () => {
     one.close();
     two.close();
   });
+  it("a failure part-way through the migration rolls everything back and leaves the file as it was (BP-108 review)", () => {
+    // A view that names report_channel_id makes DROP COLUMN fail after the copy step has already run.
+    const path = oldDb(`${BASE}, first_message_ts TEXT, pin_refused INTEGER, report_channel_name TEXT, report_channel_id TEXT`, [
+      "INSERT INTO member (member_id, role, report_channel_name, report_channel_id) VALUES ('U1', 'technical', 'n', 'G1')",
+      "CREATE VIEW v_blocker AS SELECT member_id, report_channel_id FROM member",
+    ]);
+    const before = new DatabaseSync(path);
+    const columnsBefore = (before.prepare("PRAGMA table_info(member)").all() as { name: string }[]).map((c) => c.name);
+    before.close();
+    expect(() => openStore(path)).toThrow();
+    const after = new DatabaseSync(path);
+    const columnsAfter = (after.prepare("PRAGMA table_info(member)").all() as { name: string }[]).map((c) => c.name);
+    const row = after.prepare("SELECT member_id, role, report_channel_id FROM member").get() as Record<string, unknown>;
+    after.close();
+    expect(columnsAfter).toEqual(columnsBefore);
+    expect(columnsAfter).not.toContain("channel_id");
+    expect({ ...row }).toEqual({ member_id: "U1", role: "technical", report_channel_id: "G1" });
+  });
   it("opens a database that has no report_channel_id column without copying or throwing, and keeps its channel (BP-099)", () => {
     const path = oldDb(`${BASE}, first_message_ts TEXT, pin_refused INTEGER, channel_id TEXT, channel_name TEXT, channel_state TEXT, checklist_canvas_id TEXT, canvas_surface TEXT`, [
       "INSERT INTO member (member_id, role, channel_id, channel_name, channel_state) VALUES ('U1', 'technical', 'C-7', 'onboarding-copilot-ann', 'lost')",
