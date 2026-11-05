@@ -3,6 +3,7 @@ import { createChecklist } from "./checklistMessage.js";
 import type { Deps } from "./deps.js";
 import { glossaryBlock } from "./glossary.js";
 import { firstMessageText, roleDefinitions } from "./library.js";
+import { runCanvasProbe } from "./canvasProbe.js";
 import { handleReset } from "./reset.js";
 import type { Block } from "./slack.js";
 import type { Role } from "./store.js";
@@ -162,7 +163,9 @@ export const RESET_OPERATOR_ONLY = "Reset is for operators. Ask an operator to r
 
 /** `/onboard-ch` and `/onboard-ch @member`. Returns the private reply for the caller. */
 export async function handleOnboard(deps: Deps, input: { callerId: string; text: string; triggerId?: string }): Promise<string> {
-  if (input.text.trim().split(/\s+/)[0] === "reset") return handleReset(deps, input);
+  const first = input.text.trim().split(/\s+/)[0];
+  if (first === "reset") return handleReset(deps, input);
+  if (first === "canvas-probe") return runCanvasProbe(deps, input.callerId);
   const mention = MENTION.exec(input.text)?.[1];
   const target = mention ?? input.callerId;
   if (input.text.trim() && !mention) return "Usage: `/onboard-ch` or `/onboard-ch @member` (operators only).";

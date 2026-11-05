@@ -31,6 +31,9 @@ export class FakeSlack {
   failUpload = false;
   failPin = false;
   failBookmark = false;
+  failCanvasDelete = false;
+  /** Content patterns that make the standalone canvases.create throw `canvas_creation_failed`. */
+  refuseCanvasContaining: string[] = [];
   /** Error code the channel canvas create throws; undefined means it works. */
   channelCanvasError: string | undefined;
   failRename = false;
@@ -123,9 +126,16 @@ export class FakeSlack {
       create: async (args) => {
         this.calls.push({ method: "canvases.create", args });
         if (this.failCanvas) throw slackError("canvas_disabled_for_team");
+        if (this.refuseCanvasContaining.some((p) => (args.document_content?.markdown ?? "").includes(p))) throw slackError("canvas_creation_failed");
         const id = `F-S${++this.canvasSeq}`;
         this.canvasBodies[id] = args.document_content?.markdown ?? "";
         return { canvas_id: id };
+      },
+      delete: async (args) => {
+        this.calls.push({ method: "canvases.delete", args });
+        if (this.failCanvasDelete) throw slackError("no_permission");
+        delete this.canvasBodies[args.canvas_id];
+        return {};
       },
       access: {
         set: async (args) => {

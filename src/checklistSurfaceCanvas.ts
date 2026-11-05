@@ -69,7 +69,7 @@ function serialised<T>(memberId: string, run: () => Promise<T>): Promise<T> {
 }
 
 /** Slack's own detail for an error (needed and provided scopes, messages), short and free of secrets. */
-const detailOf = (error: unknown): string | undefined => {
+export const detailOf = (error: unknown): string | undefined => {
   const data = (error as { data?: { needed?: unknown; provided?: unknown; response_metadata?: { messages?: unknown } } } | null)?.data;
   if (!data) return undefined;
   const parts = [data.needed && `needed=${String(data.needed)}`, data.provided && `provided=${String(data.provided)}`, data.response_metadata?.messages && `messages=${JSON.stringify(data.response_metadata.messages)}`];
