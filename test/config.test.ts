@@ -42,6 +42,7 @@ describe("CHECKLIST_SURFACE", () => {
     expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: "canvas" }).checklistSurface).toBe("canvas");
     expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: " Canvas " }).checklistSurface).toBe("canvas");
     expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: "message" }).checklistSurface).toBe("message");
+    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: " Both " }).checklistSurface).toBe("both");
   });
   it("falls back to message for any other value, without throwing", () => {
     for (const value of ["lists", "canvases", "1", "true"]) {

@@ -13,7 +13,7 @@ export interface SlackClient {
     rename(args: { channel: string; name: string }): Promise<unknown>;
     archive(args: { channel: string }): Promise<unknown>;
     canvases: {
-      create(args: { channel_id: string; document_content?: { type: "markdown"; markdown: string } }): Promise<{ canvas_id?: string }>;
+      create(args: { channel_id: string; title?: string; document_content?: { type: "markdown"; markdown: string } }): Promise<{ canvas_id?: string }>;
     };
   };
   chat: {

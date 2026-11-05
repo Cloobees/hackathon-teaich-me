@@ -43,11 +43,16 @@ export interface CopilotConfig {
   harnessRepo?: string;
   /** Slack `app_id` of the Claude app (`A...`), for workspaces where the connector footer carries no `<@...>` mention. */
   claudeAppId?: string;
-  /** Where the checklist is drawn (CHECKLIST_SURFACE): `message` unless the value is exactly `canvas`. */
-  checklistSurface: "canvas" | "message";
+  /** Where the checklist is drawn (CHECKLIST_SURFACE): `message` unless the value is exactly `canvas` or `both` (the pinned message and the canvas together). */
+  checklistSurface: "canvas" | "message" | "both";
 }
 
 /** Settings for the Onboarding Copilot. Throws `missing <NAME>` for the first required variable that is absent. */
+const parseSurface = (value: string | undefined): "canvas" | "message" | "both" => {
+  const v = value?.trim().toLowerCase();
+  return v === "canvas" || v === "both" ? v : "message";
+};
+
 export function loadCopilotConfig(env: NodeJS.ProcessEnv = process.env): CopilotConfig {
   const need = (name: string): string => {
     const value = env[name]?.trim();
@@ -70,7 +75,7 @@ export function loadCopilotConfig(env: NodeJS.ProcessEnv = process.env): Copilot
     botMention: env.BOT_MENTION || DEFAULT_BOT_MENTION,
     harnessRepo: env.HARNESS_REPO?.trim() || undefined,
     claudeAppId: env.CLAUDE_APP_ID?.trim() || undefined,
-    checklistSurface: env.CHECKLIST_SURFACE?.trim().toLowerCase() === "canvas" ? "canvas" : "message",
+    checklistSurface: parseSurface(env.CHECKLIST_SURFACE),
   };
 }
 

@@ -57,7 +57,7 @@ A reply (or the no-answer line) means the login works. An error means the login 
 
 Write `.claude/evidence/channel-host-run/host-run.md` and keep the app log as `.claude/evidence/channel-host-run/host.log`:
 
-1. With every other team machine off, a test account sends `/onboard-ch` in the sandbox. The bot creates a private channel for that member and invites them. The member receives one DM with a link to the channel, and the welcome and the role question are the first messages in the channel (Scenarios 1, 3 and 6). The checklist is a pinned message (`CHECKLIST_SURFACE=message`, the default) or a channel canvas (`CHECKLIST_SURFACE=canvas`). The member's Claude posts its reports in the same channel.
+1. With every other team machine off, a test account sends `/onboard-ch` in the sandbox. The bot creates a private channel for that member and invites them. The member receives one DM with a link to the channel, and the welcome and the role question are the first messages in the channel (Scenarios 1, 3 and 6). The checklist is a pinned message (`CHECKLIST_SURFACE=message`, the default), a channel canvas (`CHECKLIST_SURFACE=canvas`), or both together (`CHECKLIST_SURFACE=both`, the demo setting). The member's Claude posts its reports in the same channel.
 2. Kill the app process (Task Manager, end `node.exe`). The task restarts it with no one acting. Send `/onboard-ch` again and note the reply (the member already has a channel, so no second channel is created).
 3. Reboot the machine, sign in, and send `/onboard-ch` again.
 4. After the reboot, `curl http://127.0.0.1:<port>/api/metrics` on this machine still shows the seeded count (A-EN-007).

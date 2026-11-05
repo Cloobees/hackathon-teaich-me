@@ -1,5 +1,5 @@
 import type { ChecklistRow } from "./checklist.js";
-import { canvasSurface } from "./checklistSurfaceCanvas.js";
+import { canvasSurface, makeCanvasSurface } from "./checklistSurfaceCanvas.js";
 import { messageSurface } from "./checklistSurfaceMessage.js";
 import type { Deps } from "./deps.js";
 
@@ -17,6 +17,29 @@ export interface ChecklistSurface {
   reset(deps: Deps, memberId: string): Promise<void>;
 }
 
+const canvasAlongside = makeCanvasSurface({ alongsideMessage: true });
+
+/** Rejects with the first failure only after every promise has settled, so one surface failing never stops the other. */
+async function both(work: Promise<unknown>[]): Promise<void> {
+  const settled = await Promise.allSettled(work);
+  const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed) throw failed.reason;
+}
+
+/**
+ * The pinned message and the channel canvas together (`CHECKLIST_SURFACE=both`). The message is the source of truth for the
+ * member; the canvas is the display. A canvas failure drops only the canvas (the member's surface becomes `message`).
+ */
+export const bothSurface: ChecklistSurface = {
+  async create(deps, memberId, rows) {
+    let used: "canvas" | "message" = "message";
+    await both([messageSurface.create(deps, memberId, rows), canvasAlongside.create(deps, memberId, rows).then((s) => void (used = s))]);
+    return used;
+  },
+  update: (deps, memberId, rows, changed) => both([messageSurface.update(deps, memberId, rows), canvasAlongside.update(deps, memberId, rows, changed)]),
+  reset: (deps, memberId) => both([messageSurface.reset(deps, memberId), canvasAlongside.reset(deps, memberId)]),
+};
+
 /**
  * The member's stored `canvas_surface` wins. When it is unset, `CHECKLIST_SURFACE` decides (default `message`), except that
  * a member who already has a message checklist (`checklist_ts` set) keeps it when the config is later switched to `canvas`.
@@ -29,5 +52,7 @@ export function selectSurface(deps: Deps, memberId: string): ChecklistSurface {
   const stored = member?.canvas_surface;
   if (stored === "canvas") return canvasSurface;
   if (stored === "message") return messageSurface;
-  return deps.checklistSurface === "canvas" && !member?.checklist_ts ? canvasSurface : messageSurface;
+  if (stored === "both") return bothSurface;
+  if (member?.checklist_ts) return messageSurface;
+  return deps.checklistSurface === "both" ? bothSurface : deps.checklistSurface === "canvas" ? canvasSurface : messageSurface;
 }

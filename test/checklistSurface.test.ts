@@ -648,3 +648,73 @@ describe("canvas surface", () => {
     });
   });
 });
+
+describe("both surface: the pinned message and the canvas together (CHECKLIST_SURFACE=both)", () => {
+  const both = () => {
+    const deps = makeDeps({ glossaryUrl: GLOSSARY, checklistSurface: "both" });
+    deps.store.run("INSERT INTO member (member_id, started_by, dm_channel_id, channel_id, role) VALUES ('U1', 'command', 'D-U1', 'C-1', 'technical')");
+    createRows(deps.store, deps.items, "U1", "technical");
+    return deps;
+  };
+  const rows = (deps: ReturnType<typeof makeDeps>) => getRows(deps.store, "U1");
+  const stored = (deps: ReturnType<typeof makeDeps>) =>
+    deps.store.get<{ checklist_ts: string | null; checklist_canvas_id: string | null; canvas_surface: string | null }>(
+      "SELECT checklist_ts, checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'U1'",
+    );
+
+  it("selects the both surface for a new member, and for one stored as both; a member with a message checklist keeps it", () => {
+    const deps = both();
+    expect(selectSurface(deps, "U1")).not.toBe(messageSurface);
+    deps.store.run("UPDATE member SET canvas_surface = 'both' WHERE member_id = 'U1'");
+    expect(selectSurface(deps, "U1")).not.toBe(messageSurface);
+    deps.store.run("UPDATE member SET canvas_surface = NULL, checklist_ts = '1.1' WHERE member_id = 'U1'");
+    expect(selectSurface(deps, "U1")).toBe(messageSurface);
+  });
+
+  it("create posts and pins the message AND creates a titled canvas, with no pointer message, and stores both references", async () => {
+    const deps = both();
+    await expect(selectSurface(deps, "U1").create(deps, "U1", rows(deps))).resolves.toBe("canvas");
+    expect(deps.fake.of("chat.postMessage")).toHaveLength(1); // the checklist only, no "Canvas tab" pointer
+    expect(deps.fake.of("pins.add")).toHaveLength(1);
+    expect(deps.fake.of("conversations.canvases.create")).toHaveLength(1);
+    expect(deps.fake.of("conversations.canvases.create")[0]?.args).toMatchObject({ channel_id: "C-1", title: "Onboarding checklist" });
+    expect(stored(deps)).toEqual({ checklist_ts: "100.001", checklist_canvas_id: "F-1", canvas_surface: "both" });
+  });
+
+  it("a tick updates the message and ticks the canvas line; reset resets both", async () => {
+    const deps = both();
+    await selectSurface(deps, "U1").create(deps, "U1", rows(deps));
+    deps.store.run("UPDATE checklist_item SET status = 'ticked', method = 'observed' WHERE member_id = 'U1' AND item_id = 'I1'");
+    await selectSurface(deps, "U1").update(deps, "U1", rows(deps), ["I1"]);
+    expect(deps.fake.of("chat.update")).toHaveLength(1);
+    expect(deps.fake.canvasBodies["F-1"]).toContain("- [x] 1. Connect Claude to Slack");
+    await selectSurface(deps, "U1").reset(deps, "U1");
+    expect(deps.fake.of("chat.update")).toHaveLength(2);
+    expect(deps.fake.canvasBodies["F-1"]).toContain("Checklist reset");
+  });
+
+  it("a canvas failure drops only the canvas: one message, the member becomes message, later ticks still update the message", async () => {
+    const deps = both();
+    deps.fake.failCanvas = true;
+    deps.slack.conversations.canvases.create = async () => {
+      throw slackError("canvas_disabled_for_team");
+    };
+    await selectSurface(deps, "U1").create(deps, "U1", rows(deps));
+    expect(deps.fake.of("chat.postMessage")).toHaveLength(1);
+    expect(deps.fake.of("pins.add")).toHaveLength(1);
+    expect(stored(deps)).toMatchObject({ checklist_ts: "100.001", canvas_surface: "message" });
+    expect(deps.logs.filter((l) => l.includes("canvas_degraded"))).toHaveLength(1);
+    await selectSurface(deps, "U1").update(deps, "U1", rows(deps), ["I1"]);
+    expect(deps.fake.of("chat.update")).toHaveLength(1);
+    expect(deps.fake.of("chat.postMessage")).toHaveLength(1); // no second message built
+  });
+
+  it("a message failure does not stop the canvas", async () => {
+    const deps = both();
+    deps.slack.chat.postMessage = async () => {
+      throw slackError("ratelimited");
+    };
+    await expect(selectSurface(deps, "U1").create(deps, "U1", rows(deps))).rejects.toThrow();
+    expect(stored(deps)).toMatchObject({ checklist_canvas_id: "F-1", canvas_surface: "both" });
+  });
+});

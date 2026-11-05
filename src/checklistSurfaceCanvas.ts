@@ -26,6 +26,7 @@ interface Target {
 const target = (deps: Deps, memberId: string) =>
   deps.store.get<Target>("SELECT role, channel_id, checklist_canvas_id, canvas_surface, checklist_ts FROM member WHERE member_id = ?", memberId);
 
+const CANVAS_TITLE = "Onboarding checklist";
 const RESET_TEXT = "Checklist reset. A new one follows when you choose your role.";
 const POINTER_TEXT = "Your onboarding checklist is the canvas in this channel's Canvas tab. I tick items off there as you complete them.";
 
@@ -68,6 +69,11 @@ class CanvasLocked extends Error {
 }
 
 export interface CanvasSurfaceOptions {
+  /**
+   * The pinned message is kept by the caller (`both` mode): no pointer post, the stored surface becomes `both` on success,
+   * and a canvas failure only drops the canvas (the member's surface becomes `message`), never builds a second message.
+   */
+  alongsideMessage?: boolean;
   /** First wait after `canvas_editing_locked`; it doubles for each of the 3 retries. */
   lockDelayMs?: number;
 }
@@ -78,6 +84,8 @@ export interface CanvasSurfaceOptions {
  */
 export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): ChecklistSurface {
   const lockDelayMs = options.lockDelayMs ?? 500;
+  const alongside = options.alongsideMessage === true;
+  const surfaceValue = alongside ? "both" : "canvas";
   /** Item ids per member whose canvas edit stayed locked; the next update writes them again. In memory: the store holds the tick, and a lookup miss redraws the whole canvas. */
   const pending = new Map<string, Set<string>>();
   const pendingOf = (memberId: string): Set<string> => {
@@ -134,7 +142,7 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
           deps.log("checklist_no_channel", { member: memberId, outcome: "skipped" });
           return "message";
         }
-        if (member.canvas_surface === "message") return messageSurface.create(deps, memberId, rows);
+        if (member.canvas_surface === "message") return alongside ? "message" : messageSurface.create(deps, memberId, rows);
         const { role, channel_id: channel } = member;
         const markdown = bodyFor(deps, role, rows);
         let ok: boolean;
@@ -145,19 +153,19 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
           // tick's lookup misses on the reset text and rewrites the whole body.
           const canvasId = member.checklist_canvas_id;
           ok = (await guarded(deps, memberId, () => rewrite(deps, canvasId, markdown))) !== "failed";
-          if (ok) deps.store.run("UPDATE member SET canvas_surface = 'canvas' WHERE member_id = ?", memberId);
+          if (ok) deps.store.run("UPDATE member SET canvas_surface = ? WHERE member_id = ?", surfaceValue, memberId);
         } else {
           let canvasId: string | undefined;
           ok = (await guarded(deps, memberId, async () => {
-            canvasId = (await deps.slack.conversations.canvases.create({ channel_id: channel, document_content: { type: "markdown", markdown } })).canvas_id;
+            canvasId = (await deps.slack.conversations.canvases.create({ channel_id: channel, title: CANVAS_TITLE, document_content: { type: "markdown", markdown } })).canvas_id;
             if (!canvasId) throw new Error("no_canvas_id");
           })) === "done";
           if (ok && canvasId) {
-            deps.store.run("UPDATE member SET checklist_canvas_id = ?, canvas_surface = 'canvas' WHERE member_id = ?", canvasId, memberId);
-            await safePost(deps, memberId, { channel, text: POINTER_TEXT }, "canvas_pointer");
+            deps.store.run("UPDATE member SET checklist_canvas_id = ?, canvas_surface = ? WHERE member_id = ?", canvasId, surfaceValue, memberId);
+            if (!alongside) await safePost(deps, memberId, { channel, text: POINTER_TEXT }, "canvas_pointer");
           }
         }
-        if (!ok && isDegraded(deps, memberId)) return messageSurface.create(deps, memberId, rows);
+        if (!ok && isDegraded(deps, memberId) && !alongside) return messageSurface.create(deps, memberId, rows);
         return ok ? "canvas" : "message";
       }),
 
@@ -165,7 +173,10 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
       serialised(memberId, async () => {
         const member = target(deps, memberId);
         // The message surface takes over: a member who degraded before any message exists gets the pinned message now.
-        const toMessage = () => (target(deps, memberId)?.checklist_ts ? messageSurface.update(deps, memberId, rows) : messageSurface.create(deps, memberId, rows));
+        const toMessage = async () => {
+          if (alongside) return; // the caller updates the pinned message itself
+          await (target(deps, memberId)?.checklist_ts ? messageSurface.update(deps, memberId, rows) : messageSurface.create(deps, memberId, rows));
+        };
         if (member?.canvas_surface === "message") {
           await toMessage();
           return;
@@ -210,7 +221,7 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
     reset: (deps, memberId) =>
       serialised(memberId, async () => {
         const member = target(deps, memberId);
-        if (member?.canvas_surface === "message") return messageSurface.reset(deps, memberId);
+        if (member?.canvas_surface === "message") return alongside ? undefined : messageSurface.reset(deps, memberId);
         if (!member?.channel_id || !member.checklist_canvas_id) {
           deps.log("checklist_no_canvas", { member: memberId, outcome: "skipped" });
           return;
@@ -218,7 +229,7 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
         const canvasId = member.checklist_canvas_id;
         pending.delete(memberId);
         const result = await guarded(deps, memberId, () => rewrite(deps, canvasId, RESET_TEXT));
-        if (result === "failed" && isDegraded(deps, memberId)) await messageSurface.reset(deps, memberId);
+        if (result === "failed" && isDegraded(deps, memberId) && !alongside) await messageSurface.reset(deps, memberId);
       }),
   };
 }

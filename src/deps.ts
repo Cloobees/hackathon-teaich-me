@@ -21,5 +21,5 @@ export interface Deps {
   /** `owner/name` the I5 report must name (HARNESS_REPO); unset accepts any non-empty repo. */
   harnessRepo?: string;
   /** Surface for a member whose `canvas_surface` is unset (CHECKLIST_SURFACE); unset means `message`. */
-  checklistSurface?: "canvas" | "message";
+  checklistSurface?: "canvas" | "message" | "both";
 }
