@@ -6,11 +6,11 @@ import { loadCopilotConfig } from "./config.js";
 import type { Deps } from "./deps.js";
 import { createDashboardServer, listenOnLocalhost } from "./dashboardServer.js";
 import { log } from "./log.js";
-import { handleQuestion } from "./questions.js";
+import { routeChannelMessage, routeMentionEvent, type ChannelMsg } from "./channelMessage.js";
 import type { SlackClient } from "./slack.js";
 import { handleOnboard, handleRole, handleTeamJoin } from "./start.js";
 import { openStore, type Role } from "./store.js";
-import { findClaudeAppId, handleAttest, handleChannelMessage, handleChannelReport, withClaudeMark } from "./verify.js";
+import { findClaudeAppId, handleAttest, withClaudeMark } from "./verify.js";
 
 // The Onboarding Copilot entry point: Bolt in Socket Mode, the store, and the dashboard on 127.0.0.1.
 // Written against the designs; not yet run against a live Slack workspace (BP-001).
@@ -75,21 +75,15 @@ app.action(/^attest_I\d$/, async ({ ack, body, action, client }) => {
   await handleAttest(depsFor(client), (body as { user: { id: string } }).user.id, (action as { value: string }).value);
 });
 
+// Routing (report, I1, Q&A behind the filter, DM nudge) lives in channelMessage.ts.
 app.message(async ({ message, client }) => {
-  const m = message as { user?: string; text?: string; ts: string; channel: string; channel_type?: string; bot_id?: string; subtype?: string; app_id?: string };
-  if (m.bot_id || m.subtype || !m.user || !m.text) return;
-  const text = withClaudeMark(m.text, m.app_id, claudeAppId);
-  const deps = depsFor(client);
-  if (m.channel_type === "im") {
-    await handleQuestion(deps, claude, { memberId: m.user, channel: m.channel, text: m.text });
-    return;
-  }
-  if (text.includes("COPILOT-REPORT")) {
-    // A report block counts only in a member's stored channel; in any other channel it is ignored.
-    await handleChannelReport(deps, { channel: m.channel, user: m.user, text, ts: m.ts, claudeAppId });
-    return;
-  }
-  await handleChannelMessage(deps, { memberId: m.user, text, ts: m.ts, claudeAppId });
+  const m = message as ChannelMsg;
+  const msg = m.text ? { ...m, text: withClaudeMark(m.text, m.app_id, claudeAppId) } : m;
+  await routeChannelMessage(depsFor(client), claude, msg, { claudeAppId });
+});
+
+app.event("app_mention", async ({ event, client }) => {
+  await routeMentionEvent(depsFor(client), claude, event as unknown as ChannelMsg, { claudeAppId });
 });
 
 await app.start();
