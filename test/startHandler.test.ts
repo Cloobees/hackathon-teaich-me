@@ -14,8 +14,8 @@ type Deps = ReturnType<typeof makeDeps>;
 type Post = { channel: string; text: string; blocks?: { type: string }[] };
 
 const row = (deps: Deps, id: string) =>
-  deps.store.get<{ started_by: string; role: string | null; first_message_ts: string | null; channel_id: string | null; channel_state: string | null; dm_channel_id: string | null }>(
-    "SELECT started_by, role, first_message_ts, channel_id, channel_state, dm_channel_id FROM member WHERE member_id = ?",
+  deps.store.get<{ started_by: string; role: string | null; channel_id: string | null; channel_state: string | null; dm_channel_id: string | null }>(
+    "SELECT started_by, role, channel_id, channel_state, dm_channel_id FROM member WHERE member_id = ?",
     id,
   );
 
@@ -39,7 +39,7 @@ describe("/onboard-ch (Scenarios 3 to 6)", () => {
     expect(blocks).toMatch(/non-technical: [^"]*repositor/i);
     expect(blocks).toContain('"value":"technical"');
     expect(blocks).toContain('"value":"non-technical"');
-    expect(row(deps, "U1")).toMatchObject({ started_by: "command", channel_id: "C-1", channel_state: "active", first_message_ts: null });
+    expect(row(deps, "U1")).toMatchObject({ started_by: "command", channel_id: "C-1", channel_state: "active" });
   });
 
   it("the welcome and the role question are the first two channel posts, and the DM holds exactly one message with the channel mention (Scenarios 3 and 6)", async () => {
@@ -335,7 +335,6 @@ describe("first message (FR-ST-008, Scenarios 2, 3, 4 and 6)", () => {
     expect(await startOnboarding(bare, { memberId: "U1", startedBy: "command" })).toBe("sent");
     expect(posts(bare)).toHaveLength(1);
     expect(JSON.stringify(posts(bare)[0]?.blocks)).toContain('"type":"actions"');
-    expect(row(bare, "U1")?.first_message_ts).toBeNull();
   });
 
   it("/onboard-ch, /onboard-ch @member and team_join post identical blocks for the same member", async () => {

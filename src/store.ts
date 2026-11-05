@@ -24,13 +24,9 @@ CREATE TABLE IF NOT EXISTS member (
   role_chosen_at TEXT,
   started_by TEXT,
   dm_channel_id TEXT,
-  first_message_ts TEXT,
   checklist_ts TEXT,
   completed_at TEXT,
   seeded INTEGER NOT NULL DEFAULT 0,
-  pin_refused INTEGER,
-  report_channel_name TEXT,
-  report_channel_id TEXT,
   channel_id TEXT,
   channel_name TEXT,
   channel_state TEXT,
@@ -81,30 +77,47 @@ CREATE VIEW IF NOT EXISTS v_item_methods AS
   WHERE c.status = 'ticked' AND m.role IS NOT NULL GROUP BY m.role, m.seeded, c.item_id, c.method;
 `;
 
+// Retired columns of earlier schemas (FR-CH-025, BP-108). Each is dropped only while it is present, so a reopen changes nothing.
+const RETIRED_MEMBER_COLUMNS = ["report_channel_id", "report_channel_name", "first_message_ts", "welcome_ts", "pin_refused"];
+const CHANNEL_COLUMNS = ["channel_id", "channel_name", "channel_state", "checklist_canvas_id", "canvas_surface"];
+
+/** Brings a member table made by any earlier schema to the current one: add, then copy the report channel, then drop. */
+function migrateMember(db: DatabaseSync): void {
+  const read = () => (db.prepare("PRAGMA table_info(member)").all() as { name: string }[]).map((c) => c.name);
+  db.exec("BEGIN");
+  try {
+    const columns = read();
+    for (const column of CHANNEL_COLUMNS) {
+      if (!columns.includes(column)) db.exec(`ALTER TABLE member ADD COLUMN ${column} TEXT`);
+    }
+    // Copy first, while the old columns exist; a row that already has a channel_id is left alone.
+    if (columns.includes("report_channel_id")) {
+      const name = columns.includes("report_channel_name") ? "report_channel_name" : "NULL";
+      db.exec(
+        `UPDATE member SET channel_id = report_channel_id, channel_name = ${name}, channel_state = 'active' WHERE channel_id IS NULL AND report_channel_id IS NOT NULL`,
+      );
+    }
+    // SQLite refuses to drop a column an index names, so a hand-made index on a retired column goes first.
+    const indexes = db.prepare("PRAGMA index_list(member)").all() as { name: string; origin: string }[];
+    for (const index of indexes.filter((i) => i.origin === "c")) {
+      const named = (db.prepare(`PRAGMA index_info("${index.name}")`).all() as { name: string | null }[]).map((c) => c.name);
+      if (named.some((n) => n !== null && RETIRED_MEMBER_COLUMNS.includes(n))) db.exec(`DROP INDEX "${index.name}"`);
+    }
+    for (const column of RETIRED_MEMBER_COLUMNS) {
+      if (columns.includes(column)) db.exec(`ALTER TABLE member DROP COLUMN ${column}`);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function openStore(path: string): Store {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(SCHEMA);
-  // CREATE TABLE IF NOT EXISTS leaves a file made before pin_refused existed without the column (FR-CL-014).
-  const columns = (db.prepare("PRAGMA table_info(member)").all() as { name: string }[]).map((c) => c.name);
-  if (!columns.includes("pin_refused")) db.exec("ALTER TABLE member ADD COLUMN pin_refused INTEGER");
-  // The same for the member's report channel columns (FR-VF-018, FR-VF-019).
-  for (const column of ["report_channel_name", "report_channel_id"]) {
-    if (!columns.includes(column)) db.exec(`ALTER TABLE member ADD COLUMN ${column} TEXT`);
-  }
-  // The member's channel columns (FR-CH-025). Each is added only when missing, so a reopen changes nothing.
-  for (const column of ["channel_id", "channel_name", "channel_state", "checklist_canvas_id", "canvas_surface"]) {
-    if (!columns.includes(column)) db.exec(`ALTER TABLE member ADD COLUMN ${column} TEXT`);
-  }
-  // Copy the report channel into the new columns once; a row that already has a channel_id is left alone.
-  // Only when the old columns existed before this open, so dropping them later cannot break the open (BP-108).
-  if (columns.includes("report_channel_id") && columns.includes("report_channel_name")) {
-    db.exec(
-      "UPDATE member SET channel_id = report_channel_id, channel_name = report_channel_name, channel_state = 'active' WHERE channel_id IS NULL AND report_channel_id IS NOT NULL",
-    );
-  }
-  // A file made before the first message was renamed from the welcome keeps its rows (FR-ST-008).
-  if (columns.includes("welcome_ts")) db.exec("ALTER TABLE member RENAME COLUMN welcome_ts TO first_message_ts");
+  migrateMember(db);
   return {
     run: (sql, ...params) => Number(db.prepare(sql).run(...params).changes),
     get: <T>(sql: string, ...params: Param[]) => db.prepare(sql).get(...params) as T | undefined,

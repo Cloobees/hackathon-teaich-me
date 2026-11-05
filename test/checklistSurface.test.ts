@@ -36,7 +36,7 @@ describe("message surface: create", () => {
     expect(deps.fake.of("pins.add")).toEqual([{ method: "pins.add", args: { channel: "C-1", timestamp: ts } }]);
   });
 
-  it("a failing pins.add is logged as pin_failed, the checklist stays, no Home view, no pin_refused write", async () => {
+  it("a failing pins.add is logged as pin_failed, the checklist stays, no Home view", async () => {
     const deps = member();
     deps.fake.failPin = true;
     await expect(messageSurface.create(deps, "U1", getRows(deps.store, "U1"))).resolves.toBe("message");
@@ -44,7 +44,6 @@ describe("message surface: create", () => {
     expect(deps.logs.filter((l) => l.includes("pin_failed"))).toHaveLength(1);
     expect(checklistTs(deps)).toBe("100.001");
     expect(deps.fake.of("views.publish")).toHaveLength(0);
-    expect(deps.store.get<{ pin_refused: number | null }>("SELECT pin_refused FROM member WHERE member_id = 'U1'")?.pin_refused).toBeNull();
   });
 
   it("a member with no channel_id posts nothing, logs checklist_no_channel and does not throw", async () => {

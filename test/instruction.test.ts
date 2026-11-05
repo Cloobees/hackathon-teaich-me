@@ -216,7 +216,7 @@ describe("instruction placeholders and the stored channel id (FR-CL-013, FR-CH-0
     expect(first(deps)).not.toMatch(/onboarding-copilot-|jose/i);
   });
 
-  it("no profile lookup, no channel name build and no report channel write happen when an instruction is sent", async () => {
+  it("no profile lookup and no channel name build happen when an instruction is sent", async () => {
     const deps = makeDeps();
     await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
     const lookups = vi.spyOn(deps.slack.users, "info");
@@ -224,7 +224,6 @@ describe("instruction placeholders and the stored channel id (FR-CL-013, FR-CH-0
     await applyTick(deps, "U1", "I1", "self-attested", null);
     expect(lookups).not.toHaveBeenCalled();
     expect(deps.logs.some((l) => l.includes("users_info_failed"))).toBe(false);
-    expect(deps.store.get("SELECT report_channel_name, report_channel_id FROM member WHERE member_id = 'U1'")).toEqual({ report_channel_name: null, report_channel_id: null });
   });
 
   it("the id filled in is the stored one, not the channel the message is posted to", async () => {
