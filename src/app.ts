@@ -7,6 +7,7 @@ import type { Deps } from "./deps.js";
 import { createDashboardServer, listenOnLocalhost } from "./dashboardServer.js";
 import { log } from "./log.js";
 import { handleMemberJoined, handleMemberLeft } from "./channel.js";
+import { missingScopes } from "./scopes.js";
 import { routeChannelMessage, routeMentionEvent, type ChannelMsg } from "./channelMessage.js";
 import type { SlackClient } from "./slack.js";
 import { handleOnboard, handleRole, handleTeamJoin } from "./start.js";
@@ -98,11 +99,16 @@ app.event("app_mention", async ({ event, client }) => {
 });
 
 await app.start();
-botUserId = (await app.client.auth.test()).user_id;
+const auth = await app.client.auth.test();
+botUserId = auth.user_id;
 claudeAppId = (await findClaudeAppId({ slack: app.client as unknown as SlackClient, log })) ?? config.claudeAppId;
 log("start_up", { socket_mode: true, claude_app_found: Boolean(claudeAppId), dashboard_port: config.dashboardPort });
 // Two settings the variant needs and that fail quietly when blank: say so at start.
 if (!claudeAppId) log("config_warning", { missing: "CLAUDE_APP_ID", effect: "I1 cannot tick from the member's Claude post; the Claude app was not found in users.list either" });
+// Slack lists the token's granted scopes in every response's metadata.
+for (const scope of missingScopes((auth as { response_metadata?: { scopes?: string[] } }).response_metadata?.scopes)) {
+  log("config_warning", { missing: `scope ${scope}`, effect: "add it to the app's manifest in Slack (App Manifest), save, then reinstall the app; reinstalling alone does not add a scope" });
+}
 if (!config.glossaryUrl) log("config_warning", { missing: "GLOSSARY_CANVAS_URL", effect: "the welcome and the checklist show no glossary link or button" });
 
 const dashboard = createDashboardServer(store, items);

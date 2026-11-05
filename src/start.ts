@@ -50,14 +50,16 @@ async function runStart(deps: Deps, input: StartInput): Promise<StartResult> {
   const channel = ensured.channelId as string;
   const channelCreated = ensured.outcome === "created" || ensured.outcome === "reinvited";
   // Only a channel the app just made gets the bookmark; a reused or re-entered one already has it.
-  if (ensured.outcome === "created") await bookmarkGlossary(deps, memberId, channel);
+  const bookmarked = ensured.outcome === "created" ? await bookmarkGlossary(deps, memberId, channel) : true;
+  // When the bookmark failed, the welcome (which carries the glossary button) is pinned instead, so the glossary is still in the channel.
+  const pinWelcome = !bookmarked;
 
   const role = deps.store.get<{ role: Role | null }>("SELECT role FROM member WHERE member_id = ?", memberId)?.role;
   if (role) {
     // A replacement channel (the old one was lost) for a member whose role is fixed: the welcome, then the checklist drawn
     // again from the store with its ticks and the next unticked item's instruction. The role question is not asked again (FR-CH-024).
     if (ensured.outcome === "created") {
-      await postWelcome(deps, memberId, channel);
+      await postWelcome(deps, memberId, channel, pinWelcome);
       await createChecklist(deps, memberId, role);
       await sendLinkDm(deps, memberId, channel, ensured.teamId);
       deps.log("start", { member: memberId, started_by: startedBy, outcome: "replaced" });
@@ -78,7 +80,7 @@ async function runStart(deps: Deps, input: StartInput): Promise<StartResult> {
   }
 
   const defs = roleDefinitions(deps.libraryDir);
-  await postWelcome(deps, memberId, channel);
+  await postWelcome(deps, memberId, channel, pinWelcome);
   const question = `Which describes you better?\n• ${defs.technical}\n• ${defs.nonTechnical}`;
   const asked = await safePost(
     deps,
@@ -111,7 +113,7 @@ async function runStart(deps: Deps, input: StartInput): Promise<StartResult> {
  * It is read at each start, so an author's edit needs no deploy (FR-AS-008). With nothing to say it is skipped.
  * A failed post is isolated so the role question still goes out.
  */
-async function postWelcome(deps: Deps, memberId: string, channel: string): Promise<void> {
+async function postWelcome(deps: Deps, memberId: string, channel: string, pin = false): Promise<void> {
   const welcome = firstMessageText(deps.libraryDir, deps.glossaryUrl);
   // The blocks carry the glossary as a button; the text (with the plain link) is the notification fallback.
   const body = firstMessageText(deps.libraryDir);
@@ -119,20 +121,26 @@ async function postWelcome(deps: Deps, memberId: string, channel: string): Promi
     ...(body ? [{ type: "section", text: { type: "mrkdwn", text: body } }] : []),
     ...(deps.glossaryUrl ? [glossaryBlock(deps.glossaryUrl)] : []),
   ];
-  if (welcome) await safePost(deps, memberId, { channel, text: welcome, blocks: welcomeBlocks }, "welcome");
+  if (!welcome) return;
+  const posted = await safePost(deps, memberId, { channel, text: welcome, blocks: welcomeBlocks }, "welcome");
+  if (pin && posted?.ts) {
+    const timestamp = posted.ts;
+    await isolated(deps, memberId, "pin_failed", "welcome_pin", () => deps.slack.pins.add({ channel, timestamp }));
+  }
 }
 
 /**
  * Adds the glossary canvas to the new channel's bookmark bar (FR-CH-028). Needs the `bookmarks:write` scope and a set
  * `GLOSSARY_CANVAS_URL`; without either it is skipped or logged as `bookmark_failed`, and the start carries on.
  */
-async function bookmarkGlossary(deps: Deps, memberId: string, channel: string): Promise<void> {
-  if (!deps.glossaryUrl) return;
+async function bookmarkGlossary(deps: Deps, memberId: string, channel: string): Promise<boolean> {
+  if (!deps.glossaryUrl) return true; // nothing to add, so nothing to fall back from
   const link = deps.glossaryUrl;
   const added = await isolated(deps, memberId, "bookmark_failed", "glossary_bookmark", () =>
     deps.slack.bookmarks.add({ channel_id: channel, title: "Onboarding Glossary", type: "link", link, emoji: ":book:" }),
   );
   if (added !== undefined) deps.log("glossary_bookmarked", { member: memberId, channel });
+  return added !== undefined;
 }
 
 /** The one DM of the start flow: a link to the channel. A failure is logged and changes nothing else (FR-CH-005, FR-CH-026). */

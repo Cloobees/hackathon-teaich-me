@@ -648,3 +648,37 @@ describe("the glossary bookmark (FR-CH-028)", () => {
     expect(dmPosts(deps)).toHaveLength(1);
   });
 });
+
+describe("the glossary falls back to a pinned welcome when the bookmark fails (FR-CH-028)", () => {
+  const URL = "https://example.slack.com/docs/T1/F1";
+  const pinned = (deps: Deps) => deps.fake.of("pins.add").map((c) => c.args);
+
+  it("a failed bookmark pins the welcome message, which carries the glossary button", async () => {
+    const deps = makeDeps({ glossaryUrl: URL });
+    deps.fake.failBookmark = true;
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    const welcome = deps.fake.of("chat.postMessage").find((c) => JSON.stringify(c.args.blocks).includes("open_glossary"));
+    expect(pinned(deps)).toHaveLength(1);
+    expect(pinned(deps)[0]).toMatchObject({ channel: "C-1" });
+    expect(String((pinned(deps)[0] as { timestamp: string }).timestamp)).toBeTruthy();
+    expect(welcome).toBeTruthy();
+  });
+
+  it("a working bookmark pins nothing, and no glossary URL pins nothing", async () => {
+    const ok = makeDeps({ glossaryUrl: URL });
+    await startOnboarding(ok, { memberId: "U1", startedBy: "command" });
+    expect(pinned(ok)).toHaveLength(0);
+    const none = makeDeps();
+    await startOnboarding(none, { memberId: "U1", startedBy: "command" });
+    expect(pinned(none)).toHaveLength(0);
+  });
+
+  it("a failing pin is logged and does not stop the role question", async () => {
+    const deps = makeDeps({ glossaryUrl: URL });
+    deps.fake.failBookmark = true;
+    deps.fake.failPin = true;
+    expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("sent");
+    expect(deps.logs.filter((l) => l.includes('"pin_failed"'))).toHaveLength(1);
+    expect(posts(deps)).toHaveLength(2);
+  });
+});
