@@ -21,6 +21,8 @@ export interface SlackClient {
     update(args: { channel: string; ts: string; text: string; blocks?: Block[] }): Promise<unknown>;
   };
   canvases: {
+    create(args: { title?: string; document_content?: { type: "markdown"; markdown: string } }): Promise<{ canvas_id?: string }>;
+    access: { set(args: { canvas_id: string; access_level: "read" | "write"; channel_ids: string[] }): Promise<unknown> };
     sections: {
       lookup(args: { canvas_id: string; criteria: { section_types?: string[]; contains_text?: string } }): Promise<{ sections?: { id?: string }[] }>;
     };

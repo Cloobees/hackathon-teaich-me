@@ -36,10 +36,12 @@ const depsFor = (client: unknown): Deps => ({
   glossaryUrl: config.glossaryUrl,
   harnessRepo: config.harnessRepo,
   checklistSurface: config.checklistSurface,
+  canvasUrl: (id) => (workspace ? `${workspace.url}/docs/${workspace.teamId}/${id}` : ""),
 });
 
 let claudeAppId: string | undefined;
 let botUserId: string | undefined;
+let workspace: { url: string; teamId: string } | undefined;
 
 app.command("/onboard-ch", async ({ command, ack, respond, client }) => {
   await ack();
@@ -101,6 +103,7 @@ app.event("app_mention", async ({ event, client }) => {
 await app.start();
 const auth = await app.client.auth.test();
 botUserId = auth.user_id;
+if (auth.url && auth.team_id) workspace = { url: auth.url.replace(/\/$/, ""), teamId: auth.team_id };
 claudeAppId = (await findClaudeAppId({ slack: app.client as unknown as SlackClient, log })) ?? config.claudeAppId;
 log("start_up", { socket_mode: true, claude_app_found: Boolean(claudeAppId), dashboard_port: config.dashboardPort });
 // Two settings the variant needs and that fail quietly when blank: say so at start.

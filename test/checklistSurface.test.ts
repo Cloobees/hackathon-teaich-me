@@ -718,3 +718,64 @@ describe("both surface: the pinned message and the canvas together (CHECKLIST_SU
     expect(stored(deps)).toMatchObject({ checklist_canvas_id: "F-1", canvas_surface: "both" });
   });
 });
+
+describe("canvas fallback: no channel canvas on this plan (both mode)", () => {
+  const setup = (code?: string) => {
+    const deps = makeDeps({ glossaryUrl: GLOSSARY, checklistSurface: "both", canvasUrl: (id) => `https://acme.slack.com/docs/T1/${id}` });
+    deps.store.run("INSERT INTO member (member_id, started_by, dm_channel_id, channel_id, role) VALUES ('U1', 'command', 'D-U1', 'C-1', 'technical')");
+    createRows(deps.store, deps.items, "U1", "technical");
+    deps.fake.channelCanvasError = code;
+    return deps;
+  };
+  const rows = (deps: ReturnType<typeof makeDeps>) => getRows(deps.store, "U1");
+  const stored = (deps: ReturnType<typeof makeDeps>) =>
+    deps.store.get<{ checklist_canvas_id: string | null; canvas_surface: string | null }>("SELECT checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'U1'");
+
+  it.each(["team_tier_cannot_create_channel_canvases", "free_team_canvas_tab_already_exists", "channel_canvas_already_exists"])(
+    "%s: a standalone canvas is made, shared read-only to the channel, linked by a message and a bookmark, and stored",
+    async (code) => {
+      const deps = setup(code);
+      await expect(selectSurface(deps, "U1").create(deps, "U1", rows(deps))).resolves.toBe("canvas");
+      expect(deps.fake.of("canvases.create")).toHaveLength(1);
+      expect(deps.fake.of("canvases.create")[0]?.args).toMatchObject({ title: "Onboarding checklist" });
+      expect(deps.fake.of("canvases.access.set")[0]?.args).toEqual({ canvas_id: "F-S1", access_level: "read", channel_ids: ["C-1"] });
+      const link = "https://acme.slack.com/docs/T1/F-S1";
+      expect(deps.fake.of("chat.postMessage").some((c) => String(c.args.text).includes(link))).toBe(true);
+      expect(deps.fake.of("bookmarks.add")[0]?.args).toMatchObject({ channel_id: "C-1", link, type: "link" });
+      expect(stored(deps)).toEqual({ checklist_canvas_id: "F-S1", canvas_surface: "both" });
+      expect(deps.logs.some((l) => l.includes("canvas_standalone") && l.includes(code))).toBe(true);
+      expect(deps.fake.of("pins.add")).toHaveLength(1); // the pinned message is still there
+    },
+  );
+
+  it("a tick then edits the standalone canvas by its id", async () => {
+    const deps = setup("team_tier_cannot_create_channel_canvases");
+    await selectSurface(deps, "U1").create(deps, "U1", rows(deps));
+    deps.store.run("UPDATE checklist_item SET status = 'ticked', method = 'observed' WHERE member_id = 'U1' AND item_id = 'I1'");
+    await selectSurface(deps, "U1").update(deps, "U1", rows(deps), ["I1"]);
+    expect(deps.fake.canvasBodies["F-S1"]).toContain("- [x] 1. Connect Claude to Slack");
+  });
+
+  it("with no workspace link known the fallback is not tried: the canvas degrades and the message stays", async () => {
+    const deps = setup("team_tier_cannot_create_channel_canvases");
+    deps.canvasUrl = undefined;
+    await selectSurface(deps, "U1").create(deps, "U1", rows(deps));
+    expect(deps.fake.of("canvases.create")).toHaveLength(0);
+    expect(stored(deps)).toMatchObject({ canvas_surface: "message" });
+  });
+
+  it("when the standalone canvas fails too, only the canvas degrades, once, with Slack's detail in the log", async () => {
+    const deps = setup("team_tier_cannot_create_channel_canvases");
+    deps.fake.failCanvas = true;
+    deps.slack.canvases.create = async () => {
+      throw Object.assign(new Error("An API error occurred: missing_scope"), { data: { error: "missing_scope", needed: "canvases:write", provided: "chat:write" } });
+    };
+    await selectSurface(deps, "U1").create(deps, "U1", rows(deps));
+    const degraded = deps.logs.filter((l) => l.includes("canvas_degraded"));
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0]).toContain("missing_scope");
+    expect(degraded[0]).toContain("needed=canvases:write");
+    expect(stored(deps)).toMatchObject({ canvas_surface: "message" });
+    expect(deps.fake.of("pins.add")).toHaveLength(1);
+  });
+});

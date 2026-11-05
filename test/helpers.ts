@@ -31,6 +31,8 @@ export class FakeSlack {
   failUpload = false;
   failPin = false;
   failBookmark = false;
+  /** Error code the channel canvas create throws; undefined means it works. */
+  channelCanvasError: string | undefined;
   failRename = false;
   failArchive = false;
   failCreate = false;
@@ -97,6 +99,7 @@ export class FakeSlack {
       canvases: {
         create: async (args) => {
           this.calls.push({ method: "conversations.canvases.create", args });
+          if (this.channelCanvasError) throw slackError(this.channelCanvasError);
           if (this.failCanvas) throw slackError("canvas_disabled_for_team");
           if (this.canvases[args.channel_id]) throw slackError("channel_canvas_already_exists");
           const canvasId = `F-${++this.canvasSeq}`;
@@ -117,6 +120,19 @@ export class FakeSlack {
       },
     },
     canvases: {
+      create: async (args) => {
+        this.calls.push({ method: "canvases.create", args });
+        if (this.failCanvas) throw slackError("canvas_disabled_for_team");
+        const id = `F-S${++this.canvasSeq}`;
+        this.canvasBodies[id] = args.document_content?.markdown ?? "";
+        return { canvas_id: id };
+      },
+      access: {
+        set: async (args) => {
+          this.calls.push({ method: "canvases.access.set", args });
+          return {};
+        },
+      },
       sections: {
         lookup: async (args) => {
           this.calls.push({ method: "canvases.sections.lookup", args });

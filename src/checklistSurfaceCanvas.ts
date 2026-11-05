@@ -1,4 +1,4 @@
-import { markChannelLost, safePost } from "./channel.js";
+import { isolated, markChannelLost, safePost } from "./channel.js";
 import { itemsForRole, type ChecklistRow } from "./checklist.js";
 import { glossaryLine } from "./checklistMessage.js";
 import type { ChecklistSurface } from "./checklistSurface.js";
@@ -52,10 +52,28 @@ function serialised<T>(memberId: string, run: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** Slack's own detail for an error (needed and provided scopes, messages), short and free of secrets. */
+const detailOf = (error: unknown): string | undefined => {
+  const data = (error as { data?: { needed?: unknown; provided?: unknown; response_metadata?: { messages?: unknown } } } | null)?.data;
+  if (!data) return undefined;
+  const parts = [data.needed && `needed=${String(data.needed)}`, data.provided && `provided=${String(data.provided)}`, data.response_metadata?.messages && `messages=${JSON.stringify(data.response_metadata.messages)}`];
+  return parts.filter(Boolean).join(" ").slice(0, 300) || undefined;
+};
+
+/** Errors that mean "no channel canvas here" (plan tier, a canvas already there, tab creation refused): a standalone canvas shared to the channel works instead. */
+const NO_CHANNEL_CANVAS = [
+  "team_tier_cannot_create_channel_canvases",
+  "free_team_canvas_tab_already_exists",
+  "channel_canvas_already_exists",
+  "channel_canvas_creation_failed",
+  "canvas_tab_creation_failed",
+  "canvas_creation_failed",
+];
+
 /** Switches the member to the message surface and logs once. Later calls never reach the canvas, so no second line. */
-function degrade(deps: Deps, memberId: string, code: string): void {
+function degrade(deps: Deps, memberId: string, code: string, detail?: string): void {
   deps.store.run("UPDATE member SET canvas_surface = 'message' WHERE member_id = ?", memberId);
-  deps.log("canvas_degraded", { member: memberId, outcome: code });
+  deps.log("canvas_degraded", { member: memberId, outcome: code, detail });
 }
 
 /** Retries after the first `canvas_editing_locked`; the wait before retry n is `lockDelayMs * 2^n`. */
@@ -127,7 +145,7 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
       if (GONE_CODES.includes(code)) {
         const channel = target(deps, memberId)?.channel_id;
         if (!channel || markChannelLost(deps, memberId, channel, code) !== "marked") deps.log("canvas_channel_gone", { member: memberId, outcome: code });
-      } else degrade(deps, memberId, code);
+      } else degrade(deps, memberId, code, detailOf(error));
       return "failed";
     }
   };
@@ -146,6 +164,7 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
         const { role, channel_id: channel } = member;
         const markdown = bodyFor(deps, role, rows);
         let ok: boolean;
+        let standalone: string | undefined;
         pending.delete(memberId);
 
         if (member.checklist_canvas_id) {
@@ -157,12 +176,28 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
         } else {
           let canvasId: string | undefined;
           ok = (await guarded(deps, memberId, async () => {
-            canvasId = (await deps.slack.conversations.canvases.create({ channel_id: channel, title: CANVAS_TITLE, document_content: { type: "markdown", markdown } })).canvas_id;
+            try {
+              canvasId = (await deps.slack.conversations.canvases.create({ channel_id: channel, title: CANVAS_TITLE, document_content: { type: "markdown", markdown } })).canvas_id;
+            } catch (error) {
+              // No channel canvas on this plan or channel: make a standalone canvas, share it to the channel and link it there.
+              if (!NO_CHANNEL_CANVAS.includes(codeOf(error)) || !deps.canvasUrl) throw error;
+              deps.log("canvas_standalone", { member: memberId, outcome: codeOf(error), detail: detailOf(error) });
+              canvasId = (await deps.slack.canvases.create({ title: CANVAS_TITLE, document_content: { type: "markdown", markdown } })).canvas_id;
+              if (!canvasId) throw new Error("no_canvas_id");
+              await deps.slack.canvases.access.set({ canvas_id: canvasId, access_level: "read", channel_ids: [channel] });
+              standalone = deps.canvasUrl(canvasId);
+            }
             if (!canvasId) throw new Error("no_canvas_id");
           })) === "done";
           if (ok && canvasId) {
             deps.store.run("UPDATE member SET checklist_canvas_id = ?, canvas_surface = ? WHERE member_id = ?", canvasId, surfaceValue, memberId);
-            if (!alongside) await safePost(deps, memberId, { channel, text: POINTER_TEXT }, "canvas_pointer");
+            if (standalone) {
+              const link = standalone;
+              await safePost(deps, memberId, { channel, text: `Your onboarding checklist canvas: ${link}` }, "canvas_link");
+              await isolated(deps, memberId, "bookmark_failed", "canvas_bookmark", () =>
+                deps.slack.bookmarks.add({ channel_id: channel, title: CANVAS_TITLE, type: "link", link, emoji: ":white_check_mark:" }),
+              );
+            } else if (!alongside) await safePost(deps, memberId, { channel, text: POINTER_TEXT }, "canvas_pointer");
           }
         }
         if (!ok && isDegraded(deps, memberId) && !alongside) return messageSurface.create(deps, memberId, rows);

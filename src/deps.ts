@@ -22,4 +22,6 @@ export interface Deps {
   harnessRepo?: string;
   /** Surface for a member whose `canvas_surface` is unset (CHECKLIST_SURFACE); unset means `message`. */
   checklistSurface?: "canvas" | "message" | "both";
+  /** The link to a canvas in this workspace, from `auth.test`; undefined until the app has started. */
+  canvasUrl?: (canvasId: string) => string;
 }
