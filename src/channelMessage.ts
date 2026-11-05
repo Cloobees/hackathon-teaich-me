@@ -64,11 +64,15 @@ async function answerIfQuestion(deps: Deps, claude: ClaudeClient, msg: ChannelMs
  */
 export async function routeChannelMessage(deps: Deps, claude: ClaudeClient, msg: ChannelMsg, opts: RouteOptions = {}): Promise<void> {
   try {
-    if (msg.bot_id || msg.subtype || !msg.user || !msg.text) return;
+    if (msg.bot_id || !msg.user) return;
+    // A DM with an attachment arrives as subtype `file_share`; it still counts as DM text and gets the nudge (FR-CH-019).
+    const dmFile = msg.channel_type === "im" && msg.subtype === "file_share";
+    if ((msg.subtype && !dmFile) || (!msg.text && !dmFile)) return;
     if (msg.channel_type === "im") {
       if (!msg.app_id) await nudge(deps, msg as ChannelMsg & { user: string });
       return;
     }
+    if (!msg.text) return;
     if (msg.text.includes("COPILOT-REPORT")) {
       // A report block counts only in a member's stored channel; in any other channel it is ignored.
       await handleChannelReport(deps, { channel: msg.channel, user: msg.user, text: msg.text, ts: msg.ts, claudeAppId: opts.claudeAppId });

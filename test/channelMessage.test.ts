@@ -246,6 +246,14 @@ describe("DM nudge (Scenario 21, FR-CH-019)", () => {
     expect(itemStatuses(deps, "U1")).toEqual(before);
   });
 
+  it("a DM that carries a file (subtype file_share) still gets exactly one nudge", async () => {
+    const deps = await ready();
+    const before = posts(deps);
+    await routeChannelMessage(deps, model().client, dm({ subtype: "file_share", text: "see attached" }), { claudeAppId: CLAUDE });
+    expect(posts(deps)).toBe(before + 1);
+    await routeChannelMessage(deps, model().client, dm({ subtype: "file_share", text: undefined }), { claudeAppId: CLAUDE });
+    expect(posts(deps)).toBe(before + 2);
+  });
   it("bot, app and subtype messages in a DM are ignored", async () => {
     const deps = await ready();
     const sent = posts(deps);
