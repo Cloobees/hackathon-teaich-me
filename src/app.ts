@@ -1,5 +1,4 @@
 import { App } from "@slack/bolt";
-import { bindOnFirstMessage, handleMemberJoinedChannel } from "./bindChannel.js";
 import { handleHomeOpened } from "./checklistMessage.js";
 import { loadItems } from "./checklist.js";
 import { selectClaudeClient } from "./claudeClient.js";
@@ -52,12 +51,6 @@ app.event("team_join", async ({ event, body, client }) => {
   await handleTeamJoin(depsFor(client), { memberId: user.id, isBot: user.is_bot, eventId: (body as { event_id?: string }).event_id });
 });
 
-app.event("member_joined_channel", async ({ event, client }) => {
-  const e = event as { user?: string; channel: string; inviter?: string };
-  const result = await handleMemberJoinedChannel(depsFor(client), { event: e, botUserId });
-  if (result.outcome !== "not_own_join") log("member_joined_channel", { channel: e.channel, outcome: result.outcome });
-});
-
 app.action(/^role_(technical|non-technical)$/, async ({ ack, body, action, client }) => {
   await ack();
   const b = body as { user: { id: string }; channel?: { id: string }; message?: { ts: string } };
@@ -91,10 +84,8 @@ app.message(async ({ message, client }) => {
     await handleQuestion(deps, claude, { memberId: m.user, channel: m.channel, text: m.text });
     return;
   }
-  // Fallback bind (FR-VF-019) when the join event was not delivered; a no-op for a bound channel or a non-member author.
-  await bindOnFirstMessage(deps, { memberId: m.user, channel: m.channel });
   if (text.includes("COPILOT-REPORT")) {
-    // A report block counts only in a member's bound channel; in any other channel it is ignored.
+    // A report block counts only in a member's stored channel; in any other channel it is ignored.
     await handleChannelReport(deps, { channel: m.channel, user: m.user, text, ts: m.ts, claudeAppId });
     return;
   }

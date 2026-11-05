@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { getMemberChannel, getReportChannel, openStore, setMemberChannel, setReportChannel } from "../src/store.js";
+import { getMemberChannel, openStore, setMemberChannel } from "../src/store.js";
 
 describe("store", () => {
   it("creates the tables and views, and keeps rows across a reopen", () => {
@@ -84,21 +84,25 @@ describe("store", () => {
     const cols = store.all<{ name: string }>("PRAGMA table_info(member)").map((c) => c.name);
     expect(cols).toEqual(expect.arrayContaining(["report_channel_name", "report_channel_id"]));
     expect(store.get("SELECT role, dm_channel_id FROM member WHERE member_id = 'U1'")).toMatchObject({ role: "technical", dm_channel_id: "D1" });
-    expect(getReportChannel(store, "U1")).toEqual({ name: null, id: null });
+    expect(store.get("SELECT report_channel_name, report_channel_id FROM member WHERE member_id = 'U1'")).toEqual({ report_channel_name: null, report_channel_id: null });
     store.close();
     expect(() => openStore(path).close()).not.toThrow();
   });
-  it("stores the report channel name, then the id, and keeps the other when one is set", () => {
-    const store = openStore(":memory:");
-    store.run("INSERT INTO member (member_id) VALUES ('U1')");
-    expect(getReportChannel(store, "U1")).toEqual({ name: null, id: null });
-    setReportChannel(store, "U1", { name: "onboarding-copilot-ann" });
-    expect(getReportChannel(store, "U1")).toEqual({ name: "onboarding-copilot-ann", id: null });
-    setReportChannel(store, "U1", { name: "onboarding-copilot-ann-2", id: "G1" });
-    expect(getReportChannel(store, "U1")).toEqual({ name: "onboarding-copilot-ann-2", id: "G1" });
-    setReportChannel(store, "U1", { name: "onboarding-copilot-ann-3" });
-    expect(getReportChannel(store, "U1")).toEqual({ name: "onboarding-copilot-ann-3", id: "G1" });
-    expect(getReportChannel(store, "UNKNOWN")).toBeUndefined();
+  it("opens a database that has no report_channel_id column without copying or throwing, and keeps its channel (BP-099)", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "store-")), "new.db");
+    const old = new DatabaseSync(path);
+    old.exec(`CREATE TABLE member (
+      member_id TEXT PRIMARY KEY, role TEXT, role_chosen_at TEXT, started_by TEXT, dm_channel_id TEXT,
+      first_message_ts TEXT, checklist_ts TEXT, completed_at TEXT, seeded INTEGER NOT NULL DEFAULT 0, pin_refused INTEGER,
+      channel_id TEXT, channel_name TEXT, channel_state TEXT, checklist_canvas_id TEXT, canvas_surface TEXT
+    )`);
+    old.exec("INSERT INTO member (member_id, role, channel_id, channel_name, channel_state) VALUES ('U1', 'technical', 'C-7', 'onboarding-copilot-ann', 'lost')");
+    old.close();
+
+    expect(() => openStore(path).close()).not.toThrow();
+    const store = openStore(path);
+    expect(getMemberChannel(store, "U1")).toEqual({ id: "C-7", name: "onboarding-copilot-ann", state: "lost" });
+    store.close();
   });
   it("member has the channel columns (FR-CH-025)", () => {
     const store = openStore(":memory:");
@@ -122,7 +126,7 @@ describe("store", () => {
     expect(getMemberChannel(store, "U1")).toEqual({ id: "G1", name: "onboarding-copilot-ann", state: "active" });
     expect(getMemberChannel(store, "U2")).toEqual({ id: null, name: null, state: null });
     expect(getMemberChannel(store, "U3")).toEqual({ id: null, name: null, state: null });
-    expect(getReportChannel(store, "U1")).toEqual({ name: "onboarding-copilot-ann", id: "G1" });
+    expect(store.get("SELECT report_channel_name, report_channel_id FROM member WHERE member_id = 'U1'")).toEqual({ report_channel_name: "onboarding-copilot-ann", report_channel_id: "G1" });
     expect(store.get("SELECT role, dm_channel_id FROM member WHERE member_id = 'U1'")).toMatchObject({ role: "technical", dm_channel_id: "D1" });
     setMemberChannel(store, "U1", { id: "C-9", name: "onboarding-copilot-ann-2", state: "lost" });
     store.close();

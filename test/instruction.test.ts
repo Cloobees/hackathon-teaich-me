@@ -7,7 +7,6 @@ import { resetMember } from "../src/checklist.js";
 import { applyTick } from "../src/checklistMessage.js";
 import { instructionText, sendInstruction } from "../src/instruction.js";
 import { handleRole, startOnboarding } from "../src/start.js";
-import { getReportChannel } from "../src/store.js";
 import { loadLibrary } from "../src/library.js";
 import type { Role } from "../src/store.js";
 import { FIXTURE_LIBRARY, makeDeps, onboard, type Call } from "./helpers.js";
@@ -177,20 +176,19 @@ describe("instruction message", () => {
   });
 });
 
-describe("instruction placeholders and channel name (FR-CL-013, FR-VF-004, FR-VF-018)", () => {
+describe("instruction placeholders and the stored channel id (FR-CL-013, FR-CH-013)", () => {
   const instructionCall = (deps: ReturnType<typeof makeDeps>) => deps.fake.of("chat.postMessage").find((c) => String(c.args.text).includes("Do this"));
   const first = (deps: ReturnType<typeof makeDeps>) => String(instructionCall(deps)?.args.text);
 
-  it("replaces the placeholders in the I1 message and keeps the steps and the fenced prompt in order", async () => {
+  it("replaces the placeholders in the I1 message with the channel id and keeps the steps and the fenced prompt in order", async () => {
     const deps = makeDeps({ botMention: "Copilot Dev" });
-    deps.fake.profiles.U1 = { real_name: "José Núñez-Smith" };
     await onboard(deps, "U1", "technical");
 
     const text = first(deps);
     expect(text).not.toContain("{");
-    expect(text).toContain("onboarding-copilot-jose-nunez-smith. If a channel");
+    expect(text).toContain("named C-1. If a channel");
     expect(text).toContain("/invite Copilot Dev");
-    expect(text).toContain("welcome message to onboarding-copilot-jose-nunez-smith.");
+    expect(text).toContain("welcome message to C-1.");
     const parts = ["1. Open Claude", "2. Give your own Claude", "```", "Using your Slack connector", "```", "3. In that channel", "4. Once the copilot", "*I check:*"];
     const at: number[] = [];
     for (const part of parts) at.push(text.indexOf(part, (at.at(-1) ?? -1) + 1));
@@ -201,66 +199,49 @@ describe("instruction placeholders and channel name (FR-CL-013, FR-VF-004, FR-VF
     expect(actionIds(instructionCall(deps))).toEqual(["attest_I1"]);
   });
 
-  it("uses the default mention when the deps carry none, and stores the name at the first I1 instruction", async () => {
+  it("uses the default mention when the deps carry none", async () => {
     const deps = makeDeps();
-    deps.fake.profiles.U1 = { profile_real_name: "Ana Díaz" };
     await onboard(deps, "U1", "technical");
     expect(first(deps)).toContain("/invite @onboarding-copilot");
-    expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-ana-diaz");
   });
 
-  it("falls back to display_name when the real names are empty", async () => {
+  it("{channelName} in the I1 message is the member's stored channel id, whatever the profile name is (no I1 exception)", async () => {
     const deps = makeDeps();
-    deps.fake.profiles.U1 = { display_name: "Ana D" };
+    deps.fake.profiles.U1 = { real_name: "José Núñez-Smith" };
     await onboard(deps, "U1", "technical");
-    expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-ana-d");
+    expect(first(deps)).toContain("named C-1.");
+    expect(first(deps)).not.toMatch(/onboarding-copilot-|jose/i);
   });
 
-  it("reuses the stored name at I2 and on a re-send, and looks the profile up once for the instruction", async () => {
+  it("no profile lookup, no channel name build and no report channel write happen when an instruction is sent", async () => {
     const deps = makeDeps();
-    deps.fake.profiles.U1 = { real_name: "Ana Díaz" };
-    // The channel start has its own lookup for the channel name; the count starts at the role click.
     await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
     const lookups = vi.spyOn(deps.slack.users, "info");
     await handleRole(deps, { memberId: "U1", role: "technical", channel: "C-1", messageTs: "100.001" });
-    deps.fake.profiles.U1 = { real_name: "Someone Else" };
     await applyTick(deps, "U1", "I1", "self-attested", null);
-    await sendInstruction(deps, "U1", "C-1", "technical");
-
-    expect(lookups).toHaveBeenCalledTimes(1);
-    expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-ana-diaz");
-    expect(String(deps.fake.of("chat.postMessage").at(-1)?.args.text)).toContain("2. Connect Claude to Context Builder");
+    expect(lookups).not.toHaveBeenCalled();
+    expect(deps.logs.some((l) => l.includes("users_info_failed"))).toBe(false);
+    expect(deps.store.get("SELECT report_channel_name, report_channel_id FROM member WHERE member_id = 'U1'")).toEqual({ report_channel_name: null, report_channel_id: null });
   });
 
-  it("two members with the same profile name get the same computed name; Slack settles the clash (FR-VF-018)", async () => {
+  it("the id filled in is the stored one, not the channel the message is posted to", async () => {
     const deps = makeDeps();
-    deps.fake.profiles.U1 = { real_name: "Sam Lee" };
-    deps.fake.profiles.U2 = { real_name: "Sam Lee" };
+    await onboard(deps, "U1", "technical");
+    await sendInstruction(deps, "U1", "C-ELSEWHERE", "technical");
+    const text = String(deps.fake.of("chat.postMessage").at(-1)?.args.text);
+    expect(text).toContain("named C-1.");
+    expect(text).not.toContain("C-ELSEWHERE");
+  });
+
+  it("two members get their own channel ids, and a reset keeps the stored id for the next instruction", async () => {
+    const deps = makeDeps();
     await onboard(deps, "U1", "technical");
     await onboard(deps, "U2", "technical");
-    expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-sam-lee");
-    expect(getReportChannel(deps.store, "U2")?.name).toBe("onboarding-copilot-sam-lee");
-  });
-
-  it("a users.info failure is logged and the name falls back to the user id", async () => {
-    const deps = makeDeps();
-    deps.slack.users.info = async () => {
-      throw new Error("ratelimited");
-    };
-    await onboard(deps, "U1", "technical");
-
-    expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-u1");
-    expect(first(deps)).toContain("onboarding-copilot-u1");
-    expect(deps.logs.some((l) => l.includes("users_info_failed"))).toBe(true);
-  });
-
-  it("a reset keeps the stored name and the next instruction reuses it", async () => {
-    const deps = makeDeps();
-    deps.fake.profiles.U1 = { real_name: "Ana Díaz" };
-    await onboard(deps, "U1", "technical");
-    deps.fake.profiles.U1 = { real_name: "Renamed" };
+    const texts = instructions(deps).map((c) => String(c.args.text));
+    expect(texts[0]).toContain("named C-1.");
+    expect(texts[1]).toContain("named C-2.");
     resetMember(deps.store, "U1");
-    expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-ana-diaz");
+    expect(deps.store.get("SELECT channel_id FROM member WHERE member_id = 'U1'")).toEqual({ channel_id: "C-1" });
   });
 });
 
@@ -286,7 +267,7 @@ describe("instruction action and check lines (FR-CL-013, Scenario 13)", () => {
         expect(file.action, `${id} fixture has an action`).toBeTruthy();
         const text = String(deps.fake.of("chat.postMessage").at(-1)?.args.text);
         const lines = linesOf(deps.fake.of("chat.postMessage").at(-1));
-        const action = file.action?.replaceAll("{channelName}", "onboarding-copilot-u1").replaceAll("{botMention}", "@onboarding-copilot");
+        const action = file.action?.replaceAll("{channelName}", "C-1").replaceAll("{botMention}", "@onboarding-copilot");
         expect(text).toContain(`${ACTION}${action}\n`);
         if (file.check) {
           expect(lines).toContain(`${CHECK}${file.check}`);
@@ -401,19 +382,19 @@ describe("long instructions are split to fit Slack's 3000-character section limi
     expect(texts.join("").replaceAll(/[^y]/g, "").length).toBe(7000);
   });
 
-  it("placeholders are filled before splitting: a 2799-character action with two {channelName} and an 80-character name stays within 3000", async () => {
+  it("placeholders are filled before splitting: a 2799-character action with two {channelName} and an 80-character id stays within 3000", async () => {
     const lines = ["Create {channelName} then tell Claude to write to {channelName}.", ...numbered(26, 107)];
     const deps = makeDeps({ libraryDir: libraryWithAction(lines) });
-    deps.fake.profiles.U1 = { real_name: "a".repeat(100) };
-    await onboard(deps, "U1", "technical");
+    const id = `C${"A".repeat(79)}`;
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    deps.store.run("UPDATE member SET channel_id = ? WHERE member_id = 'U1'", id);
+    await handleRole(deps, { memberId: "U1", role: "technical", channel: id, messageTs: "100.001" });
 
-    const name = getReportChannel(deps.store, "U1")?.name as string;
-    expect(name).toHaveLength(80);
     const texts = sectionTexts(deps);
     for (const text of texts) expect(text.length).toBeLessThanOrEqual(SLACK_LIMIT);
     const joined = texts.join("\n");
     expect(joined).not.toContain("{channelName}");
-    expect(joined).toContain(`Create ${name} then tell Claude to write to ${name}.`);
+    expect(joined).toContain(`Create ${id} then tell Claude to write to ${id}.`);
   });
 
   it("a short instruction is still one section block", async () => {
@@ -423,54 +404,17 @@ describe("long instructions are split to fit Slack's 3000-character section limi
   });
 });
 
-describe("a failed profile lookup does not fix the channel name for good (FR-VF-018)", () => {
-  it("the first users.info call fails and the second succeeds: the profile-based name is stored", async () => {
-    const deps = makeDeps();
-    deps.fake.profiles.U1 = { real_name: "Ana Díaz" };
-    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
-    const real = deps.slack.users.info;
-    let calls = 0;
-    deps.slack.users.info = async (args) => {
-      calls += 1;
-      if (calls === 1) throw new Error("ratelimited");
-      return real(args);
-    };
-    await handleRole(deps, { memberId: "U1", role: "technical", channel: "C-1", messageTs: "100.001" });
-
-    expect(calls).toBe(2);
-    expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-ana-diaz");
-    expect(String(deps.fake.of("chat.postMessage").find((c) => String(c.args.text).includes("Do this"))?.args.text)).toContain("onboarding-copilot-ana-diaz");
-  });
-
-  it("both calls fail: the user-id name is stored and the failure is logged", async () => {
-    const deps = makeDeps();
-    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
-    let calls = 0;
-    deps.slack.users.info = async () => {
-      calls += 1;
-      throw new Error("ratelimited");
-    };
-    await handleRole(deps, { memberId: "U1", role: "technical", channel: "C-1", messageTs: "100.001" });
-
-    expect(calls).toBe(2);
-    expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-u1");
-    expect(deps.logs.some((l) => l.includes("users_info_failed"))).toBe(true);
-  });
-});
-
 const REAL_LIBRARY = fileURLToPath(new URL("../library", import.meta.url));
 
-describe("report channel reference", () => {
-  const item = { id: "I3", name: "Set up a Claude Project", roles: "all", order: 3 } as never;
-  it("names the channel by ID too once it is bound, so Claude can post to a private channel", () => {
+describe("channel reference in the real library (FR-CH-013)", () => {
+  const item = (id: string, name: string, order: number) => ({ id, name, roles: "all", order }) as never;
+  it("fills {channelName} with the channel id alone for I3 and for I1, with no 'channel ID' suffix", () => {
     const deps = makeDeps({ libraryDir: REAL_LIBRARY });
-    const text = instructionText(deps, item, "technical", "onboarding-copilot-u1", "C0BOUND01");
-    expect(text).toContain("onboarding-copilot-u1 (channel ID C0BOUND01)");
-  });
-  it("names it by name only before it is bound, and always for I1", () => {
-    const deps = makeDeps({ libraryDir: REAL_LIBRARY });
-    expect(instructionText(deps, item, "technical", "onboarding-copilot-u1")).not.toContain("channel ID");
-    const i1 = { id: "I1", name: "Connect Claude to Slack", roles: "all", order: 1 } as never;
-    expect(instructionText(deps, i1, "technical", "onboarding-copilot-u1", "C0BOUND01")).not.toContain("channel ID");
+    for (const i of [item("I3", "Set up a Claude Project", 3), item("I1", "Connect Claude to Slack", 1)]) {
+      const text = instructionText(deps, i, "technical", "C0BOUND01");
+      expect(text).toContain("C0BOUND01");
+      expect(text).not.toContain("channel ID");
+      expect(text).not.toContain("{channelName}");
+    }
   });
 });

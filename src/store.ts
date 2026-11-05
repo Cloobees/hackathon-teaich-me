@@ -97,9 +97,12 @@ export function openStore(path: string): Store {
     if (!columns.includes(column)) db.exec(`ALTER TABLE member ADD COLUMN ${column} TEXT`);
   }
   // Copy the report channel into the new columns once; a row that already has a channel_id is left alone.
-  db.exec(
-    "UPDATE member SET channel_id = report_channel_id, channel_name = report_channel_name, channel_state = 'active' WHERE channel_id IS NULL AND report_channel_id IS NOT NULL",
-  );
+  // Only when the old columns existed before this open, so dropping them later cannot break the open (BP-108).
+  if (columns.includes("report_channel_id") && columns.includes("report_channel_name")) {
+    db.exec(
+      "UPDATE member SET channel_id = report_channel_id, channel_name = report_channel_name, channel_state = 'active' WHERE channel_id IS NULL AND report_channel_id IS NOT NULL",
+    );
+  }
   // A file made before the first message was renamed from the welcome keeps its rows (FR-ST-008).
   if (columns.includes("welcome_ts")) db.exec("ALTER TABLE member RENAME COLUMN welcome_ts TO first_message_ts");
   return {
@@ -119,29 +122,6 @@ export function openStore(path: string): Store {
     },
     close: () => db.close(),
   };
-}
-
-export interface ReportChannel {
-  name: string | null;
-  id: string | null;
-}
-
-/** Stores the member's report channel name (set at the I1 instruction) and/or id (set at the bind); a field left out is kept. */
-export function setReportChannel(store: Store, memberId: string, channel: { name?: string; id?: string }): void {
-  store.run(
-    "UPDATE member SET report_channel_name = COALESCE(?, report_channel_name), report_channel_id = COALESCE(?, report_channel_id) WHERE member_id = ?",
-    channel.name ?? null,
-    channel.id ?? null,
-    memberId,
-  );
-}
-
-export function getReportChannel(store: Store, memberId: string): ReportChannel | undefined {
-  const row = store.get<{ report_channel_name: string | null; report_channel_id: string | null }>(
-    "SELECT report_channel_name, report_channel_id FROM member WHERE member_id = ?",
-    memberId,
-  );
-  return row && { name: row.report_channel_name, id: row.report_channel_id };
 }
 
 export type ChannelState = "active" | "member_left" | "invite_failed" | "lost";

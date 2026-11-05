@@ -1,10 +1,9 @@
 import { getRows, itemsForRole, nextPending, position, type ItemDef } from "./checklist.js";
 import type { Deps } from "./deps.js";
-import { channelName } from "./channelName.js";
 import { instructionFor } from "./library.js";
 import { sendSkillZip } from "./sendSkillZip.js";
 import type { Block } from "./slack.js";
-import { getReportChannel, setReportChannel, type Role } from "./store.js";
+import { getMemberChannel, type Role } from "./store.js";
 
 const MAX_INSTRUCTION = 2500;
 // Slack rejects a section block over 3000 characters; stay clear of it (FR-CL-013).
@@ -23,41 +22,16 @@ const fill = (text: string, values: { channelName: string; botMention: string })
   text.replaceAll("{channelName}", values.channelName).replaceAll("{botMention}", values.botMention);
 
 /**
- * The member's report channel name: the stored one, or built from the Slack profile name and stored now. A profile
- * lookup is tried twice; when both fail it is logged and the name falls back to the user id (FR-VF-018). Never rebuilt once stored.
- */
-async function memberChannelName(deps: Deps, memberId: string): Promise<string> {
-  const stored = getReportChannel(deps.store, memberId)?.name;
-  if (stored) return stored;
-  let profileName: string | undefined;
-  // One retry: a failed lookup would otherwise fix the user-id name for good, and the bind step matches on that name.
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const user = (await deps.slack.users.info({ user: memberId })).user;
-      profileName = user?.real_name || user?.profile?.real_name || user?.profile?.display_name || undefined;
-      break;
-    } catch (error) {
-      if (attempt === 2) deps.log("users_info_failed", { member: memberId, error: (error as Error).message });
-    }
-  }
-  const name = channelName(profileName, memberId);
-  setReportChannel(deps.store, memberId, { name });
-  return name;
-}
-
-/**
  * The item's instruction from its library file: the `action` value (one or more lines, kept as written), then the
  * `check` line or a confirm line (FR-CL-013). A file with no `action` falls back to its body, so a library without
  * the keys keeps working until the authors add them.
  */
-export function instructionText(deps: Deps, item: ItemDef, role: Role, channel = "", channelId?: string): string {
-  // The report prompts name the channel by ID as well: a member's Claude cannot find a private channel by name search.
-  const channelRef = channelId && item.id !== "I1" ? `${channel} (channel ID ${channelId})` : channel;
+export function instructionText(deps: Deps, item: ItemDef, role: Role, channelId = ""): string {
   try {
     const file = instructionFor(deps.libraryDir, item.id, role);
     if (file?.action) {
       const check = file.check ? `*I check:* ${file.check}` : "*You confirm:* I cannot check this step, so click *I did it* when you have done it.";
-      return fill(`*Do this:* ${file.action}\n${check}`, { channelName: channelRef, botMention: deps.botMention ?? "@onboarding-copilot" });
+      return fill(`*Do this:* ${file.action}\n${check}`, { channelName: channelId, botMention: deps.botMention ?? "@onboarding-copilot" });
     }
     const text = file?.body;
     if (text) return text.length > MAX_INSTRUCTION ? `${text.slice(0, MAX_INSTRUCTION)}...` : text;
@@ -113,9 +87,8 @@ export async function sendInstruction(deps: Deps, memberId: string, channel: str
   const mrkdwn = (text: string): Block => ({ type: "section", text: { type: "mrkdwn", text } });
   const ack = done.length ? `:white_check_mark: Done: ${done.join(" and ")}.` : "";
   const heading = `${done.length ? "Next: " : ""}*${itemLabel(deps, role, next)}*`;
-  // The channel name is built and stored at the first I1 instruction, then reused (FR-VF-018).
-  const reportChannel = await memberChannelName(deps, memberId);
-  const instruction = `${heading}\n${instructionText(deps, next, role, reportChannel, getReportChannel(deps.store, memberId)?.id ?? undefined)}`;
+  // `{channelName}` carries the member's stored channel id, for every item including I1 (FR-CH-013).
+  const instruction = `${heading}\n${instructionText(deps, next, role, getMemberChannel(deps.store, memberId)?.id ?? channel)}`;
 
   const blocks: Block[] = [...(ack ? [mrkdwn(ack)] : []), ...splitMrkdwn(instruction).map(mrkdwn), { type: "actions", elements: instructionButtons(next) }];
   await deps.slack.chat.postMessage({ channel, text: [ack, instruction].filter(Boolean).join("\n"), blocks });

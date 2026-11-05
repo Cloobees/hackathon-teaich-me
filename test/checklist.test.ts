@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createRows, getRows, itemsForRole, loadItems, position, resetAll, resetMember, tick } from "../src/checklist.js";
-import { getReportChannel, openStore, type Store } from "../src/store.js";
+import { openStore, type Store } from "../src/store.js";
 
 const config = loadItems();
 const now = () => "2026-10-26T10:05:00.000Z";
@@ -48,7 +48,7 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
   /** A member with a role, a DM, a posted checklist, a ticked item, a nonce row, a stored report channel and completion. */
   function started(store: Store, id: string, seeded = 0) {
     store.run(
-      "INSERT INTO member (member_id, role, role_chosen_at, dm_channel_id, checklist_ts, completed_at, seeded, report_channel_name, report_channel_id) VALUES (?, 'technical', 't', ?, '100.1', 't', ?, ?, ?)",
+      "INSERT INTO member (member_id, role, role_chosen_at, dm_channel_id, checklist_ts, completed_at, seeded, channel_name, channel_id) VALUES (?, 'technical', 't', ?, '100.1', 't', ?, ?, ?)",
       id,
       `D-${id}`,
       seeded,
@@ -61,7 +61,7 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
   }
   const memberRow = (store: Store, id: string) =>
     store.get<Record<string, unknown>>("SELECT role, role_chosen_at, dm_channel_id, checklist_ts, completed_at FROM member WHERE member_id = ?", id);
-  const channelOf = (store: Store, id: string) => getReportChannel(store, id);
+  const channelOf = (store: Store, id: string) => store.get<{ name: string | null; id: string | null }>("SELECT channel_name AS name, channel_id AS id FROM member WHERE member_id = ?", id);
   const rowCount = (store: Store, table: string, id: string) =>
     store.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table} WHERE member_id = ?`, id)?.n;
 

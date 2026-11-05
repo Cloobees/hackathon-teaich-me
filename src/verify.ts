@@ -1,3 +1,4 @@
+import { channelPost } from "./channel.js";
 import { applyTick } from "./checklistMessage.js";
 import type { Deps } from "./deps.js";
 import { validateReport } from "./report.js";
@@ -6,36 +7,41 @@ import type { Role, Store } from "./store.js";
 interface MemberRow {
   role: Role | null;
   role_chosen_at: string | null;
-  dm_channel_id: string | null;
 }
-const memberRow = (store: Store, memberId: string) =>
-  store.get<MemberRow>("SELECT role, role_chosen_at, dm_channel_id FROM member WHERE member_id = ?", memberId);
+const memberRow = (store: Store, memberId: string) => store.get<MemberRow>("SELECT role, role_chosen_at FROM member WHERE member_id = ?", memberId);
+
+/** Posts in the member's channel; a lost channel is handled by `channelPost`, any other failure is logged, never thrown. */
+async function postInChannel(deps: Deps, memberId: string, channel: string, text: string): Promise<void> {
+  try {
+    await channelPost(deps, memberId, { channel, text });
+  } catch (error) {
+    deps.log("report_post_failed", { member: memberId, error: (error as Error).message });
+  }
+}
 
 /**
- * A message in a channel the app hears that holds a report block. The channel is matched to the member whose bound
- * `report_channel_id` it is (FR-VF-012): no such member, and the message is ignored with no tick and no DM.
- * A post by anyone else gets one DM to the poster naming the author rule (FR-VF-017) and ticks nothing. A valid block by
- * the member ticks `validated` with the message ts as evidence and posts nothing in the channel; a failure is one DM to the member.
+ * A message in a channel the app hears that holds a report block. The channel is matched to the member whose stored
+ * `channel_id` it is (FR-CH-015): no such member, and the message is ignored with no tick and no post (FR-CH-016).
+ * A post by anyone else gets one notice in the channel naming the owner as the only valid author and ticks nothing.
+ * A valid block by the owner ticks `validated` with the message ts as evidence; a failure is one message in the channel.
  */
 export async function handleChannelReport(deps: Deps, input: { channel: string; user: string; text: string; ts?: string; claudeAppId?: string }): Promise<void> {
   if (!input.text.includes("COPILOT-REPORT")) return;
-  const owner = deps.store.get<{ member_id: string }>("SELECT member_id FROM member WHERE report_channel_id = ?", input.channel);
+  const owner = deps.store.get<{ member_id: string }>("SELECT member_id FROM member WHERE channel_id = ?", input.channel);
   if (!owner) return;
   if (input.user !== owner.member_id) {
-    const refusal = validateReport(input.text, { inMemberChannel: true, authorIsMember: false, roleChosenAt: null });
-    if (refusal.ok) return;
-    deps.log("report", { member: input.user, outcome: refusal.rule });
-    try {
-      const dm = memberRow(deps.store, input.user)?.dm_channel_id ?? (await deps.slack.conversations.open({ users: input.user })).channel?.id;
-      if (dm) await deps.slack.chat.postMessage({ channel: dm, text: refusal.message });
-    } catch (error) {
-      deps.log("report_dm_failed", { member: input.user, error: (error as Error).message });
-    }
+    deps.log("report", { member: input.user, outcome: "author" });
+    await postInChannel(
+      deps,
+      owner.member_id,
+      input.channel,
+      `That report was not posted by <@${owner.member_id}>, the only person who can post a report in this channel, so I did not read it.`,
+    );
     return;
   }
   const member = memberRow(deps.store, owner.member_id);
-  if (!member?.role || !member.dm_channel_id) {
-    deps.log("report", { member: owner.member_id, outcome: "no_dm" });
+  if (!member?.role) {
+    deps.log("report", { member: owner.member_id, outcome: "no_role" });
     return;
   }
   let email: string | undefined;
@@ -54,7 +60,7 @@ export async function handleChannelReport(deps: Deps, input: { channel: string; 
   });
   if (!result.ok) {
     deps.log("report", { member: owner.member_id, outcome: result.rule });
-    await deps.slack.chat.postMessage({ channel: member.dm_channel_id, text: result.message });
+    await postInChannel(deps, owner.member_id, input.channel, result.message);
     return;
   }
   deps.log("report", { member: owner.member_id, item: result.item, outcome: "valid" });
