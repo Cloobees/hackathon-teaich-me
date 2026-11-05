@@ -123,6 +123,10 @@ describe("checkLibrary item-file shape (FR-AS-012, D12)", () => {
       "i1.md: item I1 action must not hold /invite",
     ]);
   });
+  it("fails an I1 file that still has a create-channel step (FR-CH-013)", () => {
+    const dir = validWith("i1.md", (t) => t.replace("  2. Give", "  3. Using your Slack connector, create a private Slack channel named {channelName}.\n  2. Give"));
+    expect(checkLibrary(dir)).toEqual(["i1.md: item I1 action must not create a channel"]);
+  });
   it("fails an I1 file that holds /invite without a {botMention}", () => {
     const dir = validWith("i1.md", (t) => t.replace("  2. Give", "  3. Send /invite @the-bot\n  2. Give"));
     expect(checkLibrary(dir)).toEqual(["i1.md: item I1 action must not hold /invite"]);

@@ -1,6 +1,6 @@
 # Host runbook
 
-`[yellow]` Drafted 2 November 2026 for BP-063 (FR-EN-012). The architect's machine runs the app, the store and the dashboard. Nothing here has been run; the steps marked MANUAL produce the evidence the plan asks for.
+`[yellow]` Drafted 2 November 2026 for the channel variant (FR-EN-012, copied from the original app runbook of BP-063). The architect's machine runs the app, the store and the dashboard. Nothing here has been run; the steps marked MANUAL produce the evidence the plan asks for.
 
 The app replies only while this machine is powered, awake, online and signed in. Every other team machine can be off.
 
@@ -14,7 +14,7 @@ The app replies only while this machine is powered, awake, online and signed in.
    powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE
    ```
 
-   The query must show the AC setting index `0x00000000`. Copy that line into `.claude/evidence/BP-063/host-run.md`. Keep the lid open or set the lid-close action to Do nothing.
+   The query must show the AC setting index `0x00000000`. Copy that line into `.claude/evidence/channel-host-run/host-run.md`. Keep the lid open or set the lid-close action to Do nothing.
 2. **Claude Code login.** The app calls Claude through the signed-in Claude Code session (`CLAUDE_AUTH=claude-code` in `.env`, A-EN-004). Run `claude` once under the Windows account that will run the app and confirm it is signed in. If the login lapses, every answer fails and the app does not warn at start-up (OQ-EN-012).
 3. **`.env`.** `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `OPERATOR_USER_IDS` and `CLAUDE_AUTH` are set. Values stay in `.env`, never here.
 4. **Seed.** `npm run seed` once, so the dashboard shows the seeded cohort.
@@ -50,11 +50,11 @@ A reply (or the no-answer line) means the login works. An error means the login 
 
 ## Evidence (MANUAL)
 
-Write `.claude/evidence/BP-063/host-run.md` and keep the app log as `.claude/evidence/BP-063/host.log`:
+Write `.claude/evidence/channel-host-run/host-run.md` and keep the app log as `.claude/evidence/channel-host-run/host.log`:
 
 1. With every other team machine off, a test account sends `/onboard-ch` in the sandbox. The bot creates a private channel for that member and invites them. The member receives one DM with a link to the channel, and the welcome and the role question are the first messages in the channel (Scenarios 1, 3 and 6). The checklist is a pinned message (`CHECKLIST_SURFACE=message`, the default) or a channel canvas (`CHECKLIST_SURFACE=canvas`). The member's Claude posts its reports in the same channel.
 2. Kill the app process (Task Manager, end `node.exe`). The task restarts it with no one acting. Send `/onboard-ch` again and note the reply (the member already has a channel, so no second channel is created).
 3. Reboot the machine, sign in, and send `/onboard-ch` again.
 4. After the reboot, `curl http://127.0.0.1:<port>/api/metrics` on this machine still shows the seeded count (A-EN-007).
-5. List the times and the account's display name in `host-run.md`. `rg -c '"event":"start"' .claude/evidence/BP-063/host.log` must equal the number of starts listed there (first start, after the kill, after the reboot), and `rg -c '"event":"command"'` the number of test commands.
+5. List the times and the account's display name in `host-run.md`. `rg -c '"event":"start"' .claude/evidence/channel-host-run/host.log` must equal the number of starts listed there (first start, after the kill, after the reboot), and `rg -c '"event":"command"'` the number of test commands.
 6. `npm run check:secrets` exits 0 over `host.log`.

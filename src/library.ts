@@ -132,6 +132,7 @@ function itemShapeProblems(f: LibraryFile, id: string): string[] {
     for (const bad of ["{botMention}", "/invite"]) {
       if (has(bad)) problems.push(`${f.file}: item ${id} action must not hold ${bad}`);
     }
+    if (/create\s+(a\s+)?(private\s+)?(slack\s+)?channel/i.test(action)) problems.push(`${f.file}: item ${id} action must not create a channel`);
   }
   if (id !== "I1" && id !== "I7" && !(hasReport && reportLine === id)) {
     problems.push(`${f.file}: item ${id} action has no COPILOT-REPORT v1 block with 'item: ${id}'`);
