@@ -95,7 +95,7 @@ export async function applyTick(deps: Deps, memberId: string, itemId: string, me
     );
   }
   if (result.status === "ticked") {
-    await isolated(deps, memberId, "checklist_failed", "surface_update", () => selectSurface(deps, memberId).update(deps, memberId, getRows(deps.store, memberId)));
+    await isolated(deps, memberId, "checklist_failed", "surface_update", () => selectSurface(deps, memberId).update(deps, memberId, getRows(deps.store, memberId), result.ticked));
     if (result.completed) {
       await safePost(deps, memberId, { channel, text: `You have finished onboarding. ${glossaryLine(deps)} ${deps.items.help}`.trim() }, "completion");
     } else {

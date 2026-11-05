@@ -163,6 +163,21 @@ describe("checklist message", () => {
     expect(text(deps.fake.last("chat.update").blocks)).toContain("~3. Set up a Claude Project~");
   });
 
+  it("on the canvas surface each tick looks up and edits only the items that tick changed (Scenario 10: a validated I4 changes I3 and I4)", async () => {
+    const deps = makeDeps({ checklistSurface: "canvas" });
+    await onboard(deps, "U1", "technical");
+    await applyTick(deps, "U1", "I1", "observed", "100.5");
+    await applyTick(deps, "U1", "I2", "observed", "100.6");
+    expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(2);
+    expect(deps.fake.of("canvases.edit")).toHaveLength(2);
+
+    await applyTick(deps, "U1", "I4", "validated", "n1");
+    expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(4);
+    expect(deps.fake.of("canvases.edit")).toHaveLength(4);
+    const lookedUp = deps.fake.of("canvases.sections.lookup").map((c) => (c.args as { criteria: { contains_text: string } }).criteria.contains_text);
+    expect(lookedUp.slice(2)).toEqual(["3. Set up a Claude Project", "4. Add a skill to the Project and use it"]);
+  });
+
   it("completion sends one message naming the glossary and the help contact, and a duplicate sends none (Scenario 6)", async () => {
     const deps = makeDeps({ glossaryUrl: "https://example.slack.com/canvas/F1" });
     await onboard(deps, "N1", "non-technical");

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createRows, getRows } from "../src/checklist.js";
+import { itemLabel } from "../src/instruction.js";
+import { createRows, getRows, type ItemDef } from "../src/checklist.js";
 import { selectSurface } from "../src/checklistSurface.js";
 import { canvasSurface, makeCanvasSurface } from "../src/checklistSurfaceCanvas.js";
 import { messageSurface } from "../src/checklistSurfaceMessage.js";
@@ -207,6 +208,14 @@ describe("selectSurface: canvas and message", () => {
     expect(withSurface(null, "message")).toBe(messageSurface);
     expect(withSurface(null)).toBe(messageSurface);
   });
+  it("a member with a message checklist (checklist_ts set, canvas_surface null) keeps the message surface after the config switches to canvas", () => {
+    const deps = makeDeps({ checklistSurface: "canvas" });
+    deps.store.run("INSERT INTO member (member_id, started_by, channel_id, role, checklist_ts) VALUES ('U1', 'command', 'C-1', 'technical', '100.001')");
+    expect(selectSurface(deps, "U1")).toBe(messageSurface);
+  });
+  it("a null canvas_surface with no checklist_ts and config canvas chooses canvas", () => {
+    expect(withSurface(null, "canvas")).toBe(canvasSurface);
+  });
   it("a stored canvas_surface wins over the config", () => {
     expect(withSurface("canvas", "message")).toBe(canvasSurface);
     expect(withSurface("message", "canvas")).toBe(messageSurface);
@@ -232,6 +241,7 @@ describe("canvas surface", () => {
     deps.store.get<{ checklist_canvas_id: string | null; canvas_surface: string | null }>("SELECT checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'U1'");
   const degraded = (deps: TestDeps) => deps.logs.filter((l) => l.includes("canvas_degraded"));
   const canvasCalls = (deps: TestDeps) => deps.fake.calls.filter((c) => c.method.includes("canvas"));
+  const label = (deps: TestDeps, id: string) => itemLabel(deps, "technical", deps.items.items.find((i) => i.id === id) as ItemDef);
   const body = (deps: TestDeps) => (deps.fake.canvasBodies["F-1"] ?? "").split("\n");
 
   describe("create", () => {
@@ -328,7 +338,42 @@ describe("canvas surface", () => {
   });
 
   describe("update", () => {
-    it("looks up then replaces once per ticked item; the canvas shows [x] for ticked and [ ] for others; getContent is never used", async () => {
+    it("Scenario 10: with changed ids only those items are looked up and replaced, one lookup and one edit each, however many are already ticked", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      for (const id of ["I1", "I2", "I3", "I4", "I5", "I6"]) tickRow(deps, id);
+      await surface.update(deps, "U1", rows(deps), ["I1", "I2", "I3", "I4", "I5", "I6"]);
+      const lookups = deps.fake.of("canvases.sections.lookup").length;
+      const edits = deps.fake.of("canvases.edit").length;
+
+      tickRow(deps, "I7");
+      await surface.update(deps, "U1", rows(deps), ["I7"]);
+
+      expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(lookups + 1);
+      expect(deps.fake.of("canvases.edit")).toHaveLength(edits + 1);
+      expect(deps.fake.last("canvases.sections.lookup")).toEqual({ canvas_id: "F-1", criteria: { contains_text: label(deps, "I7") } });
+      expect(body(deps).at(-1)).toBe(`- [x] ${label(deps, "I7")}`);
+    });
+
+    it("a tick that changes two items (I3 and I4) looks up and replaces exactly those two", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I3");
+      tickRow(deps, "I4");
+      await surface.update(deps, "U1", rows(deps), ["I3", "I4"]);
+      expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(2);
+      expect(deps.fake.of("canvases.edit")).toHaveLength(2);
+      expect(body(deps).slice(3, 5).every((l) => l.startsWith("- [x] "))).toBe(true);
+    });
+
+    it("a changed id that is not ticked in the rows is skipped", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      await surface.update(deps, "U1", rows(deps), ["I1"]);
+      expect(deps.fake.of("canvases.edit")).toHaveLength(0);
+    });
+
+    it("with no changed list it falls back to every ticked item (lookup then replace each); the canvas shows [x] for ticked and [ ] for others; getContent is never used", async () => {
       const deps = canvasMember();
       await surface.create(deps, "U1", rows(deps));
       tickRow(deps, "I1");
@@ -401,16 +446,78 @@ describe("canvas surface", () => {
       expect(degraded(deps)).toHaveLength(0);
     });
 
-    it("a lock that persists after one retry degrades", async () => {
+    it("a lock that persists is retried 3 times, does not degrade, logs canvas_locked once and does not throw; later updates retry the pending item", async () => {
       const deps = canvasMember();
       await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I1");
+      const realEdit = deps.slack.canvases.edit;
+      let locked = true;
+      deps.slack.canvases.edit = async (args) => {
+        if (locked) {
+          deps.fake.calls.push({ method: "canvases.edit", args });
+          throw slackError("canvas_editing_locked");
+        }
+        return realEdit(args);
+      };
+      await expect(surface.update(deps, "U1", rows(deps), ["I1"])).resolves.toBeUndefined();
+
+      expect(deps.fake.of("canvases.edit")).toHaveLength(4);
+      expect(degraded(deps)).toHaveLength(0);
+      expect(deps.logs.filter((l) => l.includes("canvas_locked"))).toHaveLength(1);
+      expect(stored(deps)?.canvas_surface).toBe("canvas");
+      expect(body(deps)[1]).toBe("- [ ] 1. Connect Claude to Slack");
+
+      locked = false;
+      tickRow(deps, "I2");
+      await surface.update(deps, "U1", rows(deps), ["I2"]);
+      expect(body(deps).slice(1, 3)).toEqual(["- [x] 1. Connect Claude to Slack", "- [x] 2. Connect Claude to Context Builder"]);
+      expect(degraded(deps)).toHaveLength(0);
+
+      const before = deps.fake.of("canvases.edit").length;
+      tickRow(deps, "I3");
+      await surface.update(deps, "U1", rows(deps), ["I3"]);
+      expect(deps.fake.of("canvases.edit")).toHaveLength(before + 1);
+    });
+
+    it("the lock backoff doubles between the 3 retries", async () => {
+      const waits: number[] = [];
+      const realSetTimeout = globalThis.setTimeout;
+      const deps = canvasMember();
+      const slow = makeCanvasSurface({ lockDelayMs: 10 });
+      await slow.create(deps, "U1", rows(deps));
       tickRow(deps, "I1");
       deps.slack.canvases.edit = async () => {
         throw slackError("canvas_editing_locked");
       };
-      await surface.update(deps, "U1", rows(deps));
-      expect(degraded(deps)).toHaveLength(1);
-      expect(degraded(deps)[0]).toContain("canvas_editing_locked");
+      globalThis.setTimeout = ((fn: () => void, ms?: number) => {
+        waits.push(ms ?? 0);
+        return realSetTimeout(fn, 0);
+      }) as typeof setTimeout;
+      try {
+        await slow.update(deps, "U1", rows(deps), ["I1"]);
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+      expect(waits).toEqual([10, 20, 40]);
+    });
+
+    it("a lock on the first of two changed items leaves both pending, one canvas_locked line, and the next update writes both", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I3");
+      tickRow(deps, "I4");
+      const realEdit = deps.slack.canvases.edit;
+      deps.slack.canvases.edit = async () => {
+        throw slackError("canvas_editing_locked");
+      };
+      await surface.update(deps, "U1", rows(deps), ["I3", "I4"]);
+      expect(deps.logs.filter((l) => l.includes("canvas_locked"))).toHaveLength(1);
+      expect(degraded(deps)).toHaveLength(0);
+
+      deps.slack.canvases.edit = realEdit;
+      tickRow(deps, "I5");
+      await surface.update(deps, "U1", rows(deps), ["I5"]);
+      expect(body(deps).slice(3, 6).every((l) => l.startsWith("- [x] "))).toBe(true);
     });
 
     it("an edit failure part-way degrades once: the message surface posts and pins the checklist from the store, later ticks make no canvas call", async () => {
@@ -499,11 +606,9 @@ describe("canvas surface", () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
         return slowLookup(args);
       };
-      await Promise.all([surface.update(deps, "U1", first), surface.update(deps, "U1", second)]);
+      await Promise.all([surface.update(deps, "U1", first, ["I1"]), surface.update(deps, "U1", second, ["I2"])]);
 
       expect(deps.fake.calls.slice(start).map((c) => c.method)).toEqual([
-        "canvases.sections.lookup",
-        "canvases.edit",
         "canvases.sections.lookup",
         "canvases.edit",
         "canvases.sections.lookup",

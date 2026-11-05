@@ -57,8 +57,18 @@ function degrade(deps: Deps, memberId: string, code: string): void {
   deps.log("canvas_degraded", { member: memberId, outcome: code });
 }
 
+/** Retries after the first `canvas_editing_locked`; the wait before retry n is `lockDelayMs * 2^n`. */
+const LOCK_RETRIES = 3;
+
+/** An edit that stayed locked through every retry. Never degrades: the item waits in the pending set for the next update. */
+class CanvasLocked extends Error {
+  constructor() {
+    super("canvas_editing_locked");
+  }
+}
+
 export interface CanvasSurfaceOptions {
-  /** Wait before the one retry after `canvas_editing_locked`. */
+  /** First wait after `canvas_editing_locked`; it doubles for each of the 3 retries. */
   lockDelayMs?: number;
 }
 
@@ -68,32 +78,49 @@ export interface CanvasSurfaceOptions {
  */
 export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): ChecklistSurface {
   const lockDelayMs = options.lockDelayMs ?? 500;
+  /** Item ids per member whose canvas edit stayed locked; the next update writes them again. In memory: the store holds the tick, and a lookup miss redraws the whole canvas. */
+  const pending = new Map<string, Set<string>>();
+  const pendingOf = (memberId: string): Set<string> => {
+    let set = pending.get(memberId);
+    if (!set) pending.set(memberId, (set = new Set()));
+    return set;
+  };
 
+  /** One canvas edit. A lock is retried up to 3 times with doubling waits, then throws `CanvasLocked`; any other error is the caller's. */
   const edit = async (deps: Deps, canvasId: string, change: Record<string, unknown>): Promise<void> => {
-    const call = () => deps.slack.canvases.edit({ canvas_id: canvasId, changes: [change] });
-    try {
-      await call();
-    } catch (error) {
-      if (codeOf(error) !== "canvas_editing_locked") throw error;
-      await new Promise((resolve) => setTimeout(resolve, lockDelayMs));
-      await call();
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await deps.slack.canvases.edit({ canvas_id: canvasId, changes: [change] });
+        return;
+      } catch (error) {
+        if (codeOf(error) !== "canvas_editing_locked") throw error;
+        if (attempt === LOCK_RETRIES) throw new CanvasLocked();
+        await new Promise((resolve) => setTimeout(resolve, lockDelayMs * 2 ** attempt));
+      }
     }
   };
   const rewrite = (deps: Deps, canvasId: string, markdown: string) =>
     edit(deps, canvasId, { operation: "replace", document_content: { type: "markdown", markdown } });
 
-  /** Runs canvas work. A gone channel is logged and swallowed, any other error degrades. True when the work completed. */
-  const guarded = async (deps: Deps, memberId: string, work: () => Promise<void>): Promise<boolean> => {
+  /**
+   * Runs canvas work. A gone channel is logged and swallowed, a lock that outlasted the retries is logged once and kept
+   * (no degrade), any other error degrades. "done" when the work completed, "locked" when only the lock stopped it.
+   */
+  const guarded = async (deps: Deps, memberId: string, work: () => Promise<void>): Promise<"done" | "locked" | "failed"> => {
     try {
       await work();
-      return true;
+      return "done";
     } catch (error) {
+      if (error instanceof CanvasLocked) {
+        deps.log("canvas_locked", { member: memberId, outcome: "canvas_editing_locked" });
+        return "locked";
+      }
       const code = codeOf(error);
       if (GONE_CODES.includes(code)) {
         const channel = target(deps, memberId)?.channel_id;
         if (!channel || markChannelLost(deps, memberId, channel, code) !== "marked") deps.log("canvas_channel_gone", { member: memberId, outcome: code });
       } else degrade(deps, memberId, code);
-      return false;
+      return "failed";
     }
   };
 
@@ -111,18 +138,20 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
         const { role, channel_id: channel } = member;
         const markdown = bodyFor(deps, role, rows);
         let ok: boolean;
+        pending.delete(memberId);
 
         if (member.checklist_canvas_id) {
-          // A reset member choosing a role again: the canvas stays and its body is rewritten.
+          // A reset member choosing a role again: the canvas stays and its body is rewritten. A lock keeps the canvas; the next
+          // tick's lookup misses on the reset text and rewrites the whole body.
           const canvasId = member.checklist_canvas_id;
-          ok = await guarded(deps, memberId, () => rewrite(deps, canvasId, markdown));
+          ok = (await guarded(deps, memberId, () => rewrite(deps, canvasId, markdown))) !== "failed";
           if (ok) deps.store.run("UPDATE member SET canvas_surface = 'canvas' WHERE member_id = ?", memberId);
         } else {
           let canvasId: string | undefined;
-          ok = await guarded(deps, memberId, async () => {
+          ok = (await guarded(deps, memberId, async () => {
             canvasId = (await deps.slack.conversations.canvases.create({ channel_id: channel, document_content: { type: "markdown", markdown } })).canvas_id;
             if (!canvasId) throw new Error("no_canvas_id");
-          });
+          })) === "done";
           if (ok && canvasId) {
             deps.store.run("UPDATE member SET checklist_canvas_id = ?, canvas_surface = 'canvas' WHERE member_id = ?", canvasId, memberId);
             await safePost(deps, memberId, { channel, text: POINTER_TEXT }, "canvas_pointer");
@@ -132,7 +161,7 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
         return ok ? "canvas" : "message";
       }),
 
-    update: (deps, memberId, rows) =>
+    update: (deps, memberId, rows, changed) =>
       serialised(memberId, async () => {
         const member = target(deps, memberId);
         // The message surface takes over: a member who degraded before any message exists gets the pinned message now.
@@ -146,21 +175,36 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
           return;
         }
         const { role, checklist_canvas_id: canvasId } = member;
-        const ok = await guarded(deps, memberId, async () => {
-          for (const item of itemsForRole(deps.items, role)) {
-            if (!rows.some((r) => r.item_id === item.id && r.status === "ticked")) continue;
-            const label = itemLabel(deps, role, item);
-            const found = await deps.slack.canvases.sections.lookup({ canvas_id: canvasId, criteria: { contains_text: label } });
-            const sectionId = found.sections?.[0]?.id;
-            if (!sectionId) {
-              // The line is not in the canvas (a human edited it): rewrite the whole canvas from the store and stop.
-              await rewrite(deps, canvasId, bodyFor(deps, role, rows));
+        const waiting = pendingOf(memberId);
+        const isTicked = (id: string) => rows.some((r) => r.item_id === id && r.status === "ticked");
+        // This tick's items (every ticked item when the caller gave none) plus any a lock left pending, in checklist order.
+        const wanted = new Set([...(changed ?? rows.filter((r) => r.status === "ticked").map((r) => r.item_id)), ...waiting]);
+        const todo = itemsForRole(deps.items, role).filter((item) => wanted.has(item.id) && isTicked(item.id));
+        const result = await guarded(deps, memberId, async () => {
+          for (const [n, item] of todo.entries()) {
+            try {
+              const label = itemLabel(deps, role, item);
+              const found = await deps.slack.canvases.sections.lookup({ canvas_id: canvasId, criteria: { contains_text: label } });
+              const sectionId = found.sections?.[0]?.id;
+              if (!sectionId) {
+                // The line is not in the canvas (a human edited it): rewrite the whole canvas from the store and stop.
+                await rewrite(deps, canvasId, bodyFor(deps, role, rows));
+                waiting.clear();
+                return;
+              }
+              await edit(deps, canvasId, { operation: "replace", section_id: sectionId, document_content: { type: "markdown", markdown: `- [x] ${label}` } });
+              waiting.delete(item.id);
+            } catch (error) {
+              if (!(error instanceof CanvasLocked)) throw error;
+              // Still locked after the retries: the member is editing the canvas. Keep this and the unwritten items for the next update.
+              for (const left of todo.slice(n)) waiting.add(left.id);
+              deps.log("canvas_locked", { member: memberId, outcome: "canvas_editing_locked" });
               return;
             }
-            await edit(deps, canvasId, { operation: "replace", section_id: sectionId, document_content: { type: "markdown", markdown: `- [x] ${label}` } });
           }
         });
-        if (!ok && isDegraded(deps, memberId)) await toMessage();
+        if (result === "failed") pending.delete(memberId);
+        if (result === "failed" && isDegraded(deps, memberId)) await toMessage();
       }),
 
     reset: (deps, memberId) =>
@@ -172,8 +216,9 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
           return;
         }
         const canvasId = member.checklist_canvas_id;
-        const ok = await guarded(deps, memberId, () => rewrite(deps, canvasId, RESET_TEXT));
-        if (!ok && isDegraded(deps, memberId)) await messageSurface.reset(deps, memberId);
+        pending.delete(memberId);
+        const result = await guarded(deps, memberId, () => rewrite(deps, canvasId, RESET_TEXT));
+        if (result === "failed" && isDegraded(deps, memberId)) await messageSurface.reset(deps, memberId);
       }),
   };
 }
