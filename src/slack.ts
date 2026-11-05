@@ -8,7 +8,7 @@ export interface SlackClient {
     info(args: { channel: string }): Promise<{
       channel?: { id?: string; name?: string; is_private?: boolean; is_group?: boolean; is_archived?: boolean };
     }>;
-    create(args: { name: string; is_private?: boolean }): Promise<{ channel?: { id?: string; name?: string } }>;
+    create(args: { name: string; is_private?: boolean }): Promise<{ channel?: { id?: string; name?: string; context_team_id?: string } }>;
     invite(args: { channel: string; users: string }): Promise<unknown>;
     canvases: {
       create(args: { channel_id: string; document_content?: { type: "markdown"; markdown: string } }): Promise<{ canvas_id?: string }>;
