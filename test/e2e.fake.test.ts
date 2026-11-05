@@ -257,7 +257,7 @@ describe("end to end on the fake clients (BP-107)", () => {
 
     const reset = await handleOnboard(deps, { callerId: "UOP1", text: `reset <@${MEMBER}>` });
     expect(reset).toContain(`Reset <@${MEMBER}>`);
-    expect(member(deps)).toMatchObject({ role: null, role_chosen_at: null, completed_at: null, checklist_ts: null, channel_id: CHANNEL, channel_name: "onboarding-copilot-sam-member", channel_state: "lost" });
+    expect(member(deps)).toMatchObject({ role: null, role_chosen_at: null, completed_at: null, checklist_ts: null, channel_id: CHANNEL, channel_state: "lost" });
     expect(deps.store.all("SELECT * FROM checklist_item WHERE member_id = ?", MEMBER)).toHaveLength(0);
 
     const restart = await handleOnboard(deps, { callerId: MEMBER, text: "", triggerId: "TRIG2" });

@@ -60,7 +60,7 @@ describe("reset by an operator", () => {
     const calls = deps.fake.calls.length;
 
     const reply = await handleReset(deps, { callerId: "UOP1", text: "reset <@U2|sam>" });
-    expect(reply).toContain("the old channel and its messages stay");
+    expect(reply).toContain("the old channel is renamed and archived");
     expect(reply).toContain("in a new channel");
     expect(reply).not.toContain("DM");
 
@@ -70,11 +70,11 @@ describe("reset by an operator", () => {
     expect(row()).toMatchObject({ role: null, completed_at: null, checklist_ts: null, dm_channel_id: "D-U2" });
     expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id = 'U2'")).toHaveLength(0);
     expect(deps.store.all("SELECT 1 FROM report_nonce WHERE member_id = 'U2'")).toHaveLength(1);
-    expect(getMemberChannel(deps.store, "U2")).toEqual({ id: "G2", name: "onboarding-copilot-sam", state: "lost" });
+    expect(getMemberChannel(deps.store, "U2")).toMatchObject({ id: "G2", state: "lost" });
     expect(JSON.stringify(deps.store.all("SELECT * FROM member WHERE member_id = 'S1'"))).toBe(seededBefore);
-    // The only Slack call is the surface going back to its empty state (FR-CH-021); nothing is posted and nobody is told.
+    // The surface goes back to its empty state, then the channel is renamed and archived (FR-CH-021); nothing is posted and nobody is told.
     const added = deps.fake.calls.slice(calls);
-    expect(added.map((c) => c.method)).toEqual(["chat.update"]);
+    expect(added.map((c) => c.method)).toEqual(["chat.update", "conversations.rename", "conversations.archive"]);
     expect(deps.fake.last("chat.update")).toMatchObject({ channel: "G2", text: "Checklist reset. A new one follows when you choose your role." });
   });
 
@@ -134,9 +134,9 @@ describe("reset by an operator", () => {
     expect(seededRows()).toBe(seededBefore);
     expect(deps.store.all("SELECT 1 FROM member WHERE seeded = 0 AND (role IS NOT NULL OR checklist_ts IS NOT NULL OR completed_at IS NOT NULL)")).toHaveLength(0);
     expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id IN ('U2', 'U3', 'U4')")).toHaveLength(0);
-    expect(getMemberChannel(deps.store, "U3")).toEqual({ id: "G3", name: "onboarding-copilot-u3", state: "lost" });
+    expect(getMemberChannel(deps.store, "U3")).toMatchObject({ id: "G3", state: "lost" });
     // One surface reset per test member and nothing else: no post, no DM, no seeded member touched.
-    expect(deps.fake.calls.slice(calls).map((c) => c.method)).toEqual(["chat.update", "chat.update", "chat.update"]);
+    expect(deps.fake.calls.slice(calls).map((c) => c.method)).toEqual(["chat.update", "conversations.rename", "conversations.archive", "chat.update", "conversations.rename", "conversations.archive", "chat.update", "conversations.rename", "conversations.archive"]);
   });
 
   it.each(["reset <@U9|nobody>", "reset <@U5>"])("`/onboard-ch %s` (no row, or a seeded row) says there is nothing to reset and changes nothing", async (text) => {
@@ -176,11 +176,11 @@ describe("reset detaches the channel so the next start makes a new one (FR-CH-02
 
     await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
 
-    expect(deps.fake.calls.slice(calls).map((c) => c.method)).toEqual(["canvases.edit"]);
+    expect(deps.fake.calls.slice(calls).map((c) => c.method)).toEqual(["canvases.edit", "conversations.rename", "conversations.archive"]);
     expect(deps.fake.canvasBodies["F-1"]).toContain("Checklist reset");
     expect(stored(deps, "U2")).toEqual({
       channel_id: "C-1",
-      channel_name: "onboarding-copilot-u2",
+      channel_name: expect.stringMatching(/^onboarding-copilot-u2-archived-\d{12}$/),
       channel_state: "lost",
       checklist_canvas_id: "F-1",
       canvas_surface: "canvas",
@@ -269,12 +269,83 @@ describe("reset detaches the channel so the next start makes a new one (FR-CH-02
     expect(stored(deps, "U2")).toMatchObject({ role: null, channel_id: "C-1", channel_state: "lost" });
   });
 
-  it("a member with no checklist yet (no role) is cleared with no surface call", async () => {
+  it("a member with no checklist yet (no role) is cleared with no surface call, and the channel is renamed and archived", async () => {
     const deps = makeDeps();
     await handleOnboard(deps, { callerId: "U2", text: "" });
     const calls = deps.fake.calls.length;
     await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
-    expect(deps.fake.calls).toHaveLength(calls);
+    expect(deps.fake.calls.slice(calls).map((c) => c.method)).toEqual(["conversations.rename", "conversations.archive"]);
     expect(stored(deps, "U2")).toMatchObject({ channel_id: "C-1", channel_state: "lost" });
   });
 });
+
+describe("reset renames and archives the old channel (FR-CH-021)", () => {
+  const calls = (deps: Deps, method: string) => deps.fake.of(method).map((c) => c.args);
+
+  it("renames to an -archived-<time> name, then archives, in that order, and the next start gets the clean name", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    const first = getMemberChannel(deps.store, "U2");
+    await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+    const order = deps.fake.calls.map((c) => c.method).filter((m) => m === "conversations.rename" || m === "conversations.archive");
+    expect(order).toEqual(["conversations.rename", "conversations.archive"]);
+    const [rename] = calls(deps, "conversations.rename");
+    expect(rename).toMatchObject({ channel: first?.id });
+    expect(String((rename as { name: string }).name)).toMatch(new RegExp(`^${first?.name}-archived-[0-9]{12}$`));
+    expect(calls(deps, "conversations.archive")).toEqual([{ channel: first?.id }]);
+    // The old name is free again (the fake only refuses names it was told are taken), so the new channel has the clean name.
+    await handleOnboard(deps, { callerId: "U2", text: "" });
+    expect(getMemberChannel(deps.store, "U2")).toMatchObject({ name: first?.name, state: "active" });
+    expect(getMemberChannel(deps.store, "U2")?.id).not.toBe(first?.id);
+  });
+
+  it("the renamed name stays within 80 characters", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    deps.store.run("UPDATE member SET channel_name = ? WHERE member_id = 'U2'", "onboarding-copilot-" + "a".repeat(61));
+    await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+    expect(String((calls(deps, "conversations.rename")[0] as { name: string }).name).length).toBeLessThanOrEqual(80);
+  });
+
+  it("a failed rename is logged once, the channel is still archived and the next start falls back to the -2 name", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    deps.fake.failRename = true;
+    await expect(handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" })).resolves.toContain("Reset <@U2>");
+    expect(deps.logs.filter((l) => l.includes("channel_rename_failed"))).toHaveLength(1);
+    expect(calls(deps, "conversations.archive")).toHaveLength(1);
+    deps.fake.nameTaken = ["onboarding-copilot-u2"];
+    await handleOnboard(deps, { callerId: "U2", text: "" });
+    expect(getMemberChannel(deps.store, "U2")).toMatchObject({ name: "onboarding-copilot-u2-2", state: "active" });
+  });
+
+  it("a failed archive is logged once and the reset and the new channel still work", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    deps.fake.failArchive = true;
+    await expect(handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" })).resolves.toContain("Reset <@U2>");
+    expect(deps.logs.filter((l) => l.includes("channel_archive_failed"))).toHaveLength(1);
+    expect(stored2(deps)).toMatchObject({ role: null, channel_state: "lost" });
+    await handleOnboard(deps, { callerId: "U2", text: "" });
+    expect(getMemberChannel(deps.store, "U2")).toMatchObject({ state: "active" });
+  });
+
+  it("a channel already lost is not renamed or archived again, and a second reset calls neither", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+    await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+    expect(calls(deps, "conversations.rename")).toHaveLength(1);
+    expect(calls(deps, "conversations.archive")).toHaveLength(1);
+  });
+
+  it("a seeded member's row is never renamed or archived", async () => {
+    const deps = makeDeps();
+    deps.store.run("INSERT INTO member (member_id, role, seeded, channel_id, channel_name, channel_state) VALUES ('S1', 'technical', 1, 'CS1', 'onboarding-copilot-s1', 'active')");
+    await handleReset(deps, { callerId: "UOP1", text: "reset all" });
+    expect(calls(deps, "conversations.rename")).toHaveLength(0);
+    expect(calls(deps, "conversations.archive")).toHaveLength(0);
+  });
+});
+
+const stored2 = (deps: Deps) => deps.store.get<Record<string, unknown>>("SELECT role, channel_state FROM member WHERE member_id = 'U2'");

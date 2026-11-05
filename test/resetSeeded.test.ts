@@ -60,7 +60,7 @@ describe("the operator reset leaves seeded rows alone and keeps the canvas colum
     const [memberBefore, itemsBefore] = [seeded(), seededItems()];
 
     await expect(handleReset(deps, { callerId: "UOP1", text: "reset all" })).resolves.toContain("Reset 1 test member.");
-    expect(deps.fake.calls.map((c) => c.method)).toEqual(["canvases.edit"]);
+    expect(deps.fake.calls.map((c) => c.method)).toEqual(["canvases.edit", "conversations.rename", "conversations.archive"]);
     expect(deps.fake.calls[0]?.args).toMatchObject({ canvas_id: "FLIVE" });
     expect(seeded()).toBe(memberBefore);
     expect(seededItems()).toBe(itemsBefore);

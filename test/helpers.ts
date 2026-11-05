@@ -31,6 +31,8 @@ export class FakeSlack {
   failUpload = false;
   failPin = false;
   failBookmark = false;
+  failRename = false;
+  failArchive = false;
   failCreate = false;
   failInvite = false;
   failCanvas = false;
@@ -78,6 +80,18 @@ export class FakeSlack {
       invite: async (args) => {
         this.calls.push({ method: "conversations.invite", args });
         if (this.failInvite) throw slackError("user_is_restricted");
+        return {};
+      },
+      rename: async (args) => {
+        this.calls.push({ method: "conversations.rename", args });
+        if (this.failRename) throw slackError("not_authorized");
+        const made = this.created.find((c) => c.id === args.channel);
+        if (made) made.name = args.name;
+        return {};
+      },
+      archive: async (args) => {
+        this.calls.push({ method: "conversations.archive", args });
+        if (this.failArchive) throw slackError("not_authorized");
         return {};
       },
       canvases: {

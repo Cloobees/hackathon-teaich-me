@@ -10,6 +10,8 @@ export interface SlackClient {
     }>;
     create(args: { name: string; is_private?: boolean }): Promise<{ channel?: { id?: string; name?: string; context_team_id?: string } }>;
     invite(args: { channel: string; users: string }): Promise<unknown>;
+    rename(args: { channel: string; name: string }): Promise<unknown>;
+    archive(args: { channel: string }): Promise<unknown>;
     canvases: {
       create(args: { channel_id: string; document_content?: { type: "markdown"; markdown: string } }): Promise<{ canvas_id?: string }>;
     };
