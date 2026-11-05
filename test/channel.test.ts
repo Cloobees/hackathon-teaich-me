@@ -99,9 +99,9 @@ describe("ensureMemberChannel", () => {
 
   it("returns create_failed when the user id name is taken too", async () => {
     const deps = makeDeps();
-    deps.fake.nameTaken = ["onboarding-copilot-u1", "onboarding-copilot-u1-2", "onboarding-copilot-u1-3", "onboarding-copilot-u1-4", "onboarding-copilot-u1-5"];
+    deps.fake.nameTaken = Array.from({ length: 12 }, (_, attempt) => channelNameFor(undefined, "U1", attempt));
     const result = await start(deps);
-    expect(deps.fake.of("conversations.create")).toHaveLength(5);
+    expect(deps.fake.of("conversations.create")).toHaveLength(12);
     expect(result.outcome).toBe("create_failed");
     expect(rowCount(deps)).toBe(0);
   });
@@ -443,5 +443,17 @@ describe("a replacement channel clears the old channel's references (FR-CH-024, 
     setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "member_left" });
     await start(deps);
     expect(refs(deps)).toEqual({ checklist_ts: "9.9", checklist_canvas_id: "F-9", canvas_surface: "canvas" });
+  });
+});
+
+describe("channelNameFor beyond attempt 4 (many resets)", () => {
+  it("keeps the user id name and adds -2, -3 and so on for attempts 5 and up, never repeating", () => {
+    expect(channelNameFor("Ada Lovelace", "UABC9", 5)).toBe("onboarding-copilot-uabc9-2");
+    expect(channelNameFor("Ada Lovelace", "UABC9", 6)).toBe("onboarding-copilot-uabc9-3");
+    for (const profile of [undefined, "Ada Lovelace"]) {
+      const names = Array.from({ length: 12 }, (_, attempt) => channelNameFor(profile, "UABC9", attempt));
+      expect(new Set(names).size).toBe(12);
+      for (const name of names) expect(name.length).toBeLessThanOrEqual(80);
+    }
   });
 });

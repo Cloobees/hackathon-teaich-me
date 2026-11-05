@@ -6,6 +6,7 @@ import { getMemberChannel, setMemberChannel, type ChannelState, type Store } fro
 const PREFIX = "onboarding-copilot-";
 const MAX_LENGTH = 80; // Slack's channel name limit
 const MAX_RETRIES = 3; // name_taken retries with a suffix; the next try uses the user id (Create and invite errors)
+const MAX_ATTEMPTS = 12; // names tried per create: every reset leaves its old channel, so a tester needs many (FR-CH-021)
 export const LOST_CODES = ["is_archived", "channel_not_found", "not_in_channel"];
 
 export type ChannelOutcome = "created" | "existing" | "reinvited" | "create_failed" | "invite_failed";
@@ -18,13 +19,15 @@ export interface EnsureResult {
 }
 
 /**
- * The channel name for a try: attempts 1 to 3 add `-2` to `-4`; attempt 4 is the lowercase user id.
+ * The channel name for a try: attempts 1 to 3 add `-2` to `-4`; attempt 4 is the lowercase user id, and attempts 5 and up
+ * add `-2`, `-3` and so on to it.
  * With no profile name every name is already built from the user id, so attempt 4 continues the suffixes (`-5`)
  * and no create call repeats a name that already failed.
  */
 export function channelNameFor(profileName: string | undefined, userId: string, attempt = 0): string {
   if (attempt > MAX_RETRIES && slugOf(profileName ?? "")) {
-    return PREFIX + slugOf(userId).slice(0, MAX_LENGTH - PREFIX.length).replace(/-+$/, "");
+    const extra = attempt > MAX_RETRIES + 1 ? `-${attempt - MAX_RETRIES}` : "";
+    return PREFIX + slugOf(userId).slice(0, MAX_LENGTH - PREFIX.length - extra.length).replace(/-+$/, "") + extra;
   }
   const suffix = attempt > 0 ? `-${attempt + 1}` : "";
   const slug = slugOf(profileName ?? "") || slugOf(userId);
@@ -106,7 +109,7 @@ async function ensureOnce(deps: Deps, input: { memberId: string; startedBy: "eve
   // No channel, or a lost one: create.
   const profileName = await profileNameOf(deps.slack, memberId);
   let created: { id: string; name: string; teamId?: string } | undefined;
-  for (let attempt = 0; attempt <= MAX_RETRIES + 1; attempt++) {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const name = channelNameFor(profileName, memberId, attempt);
     try {
       const channel = (await deps.slack.conversations.create({ name, is_private: true })).channel;
@@ -115,7 +118,7 @@ async function ensureOnce(deps: Deps, input: { memberId: string; startedBy: "eve
       break;
     } catch (error) {
       const code = errorCode(error);
-      if (code.includes("name_taken") && attempt <= MAX_RETRIES) continue;
+      if (code.includes("name_taken") && attempt < MAX_ATTEMPTS - 1) continue;
       deps.log("channel_create_failed", { member: memberId, error: code });
       return { outcome: "create_failed" };
     }

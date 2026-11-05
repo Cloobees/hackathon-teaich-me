@@ -60,7 +60,8 @@ describe("reset by an operator", () => {
     const calls = deps.fake.calls.length;
 
     const reply = await handleReset(deps, { callerId: "UOP1", text: "reset <@U2|sam>" });
-    expect(reply).toContain("earlier messages in the channel stay");
+    expect(reply).toContain("the old channel and its messages stay");
+    expect(reply).toContain("in a new channel");
     expect(reply).not.toContain("DM");
 
     expect(reply).toContain("<@U2>");
@@ -69,7 +70,7 @@ describe("reset by an operator", () => {
     expect(row()).toMatchObject({ role: null, completed_at: null, checklist_ts: null, dm_channel_id: "D-U2" });
     expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id = 'U2'")).toHaveLength(0);
     expect(deps.store.all("SELECT 1 FROM report_nonce WHERE member_id = 'U2'")).toHaveLength(1);
-    expect(getMemberChannel(deps.store, "U2")).toEqual({ id: "G2", name: "onboarding-copilot-sam", state: "active" });
+    expect(getMemberChannel(deps.store, "U2")).toEqual({ id: "G2", name: "onboarding-copilot-sam", state: "lost" });
     expect(JSON.stringify(deps.store.all("SELECT * FROM member WHERE member_id = 'S1'"))).toBe(seededBefore);
     // The only Slack call is the surface going back to its empty state (FR-CH-021); nothing is posted and nobody is told.
     const added = deps.fake.calls.slice(calls);
@@ -77,20 +78,40 @@ describe("reset by an operator", () => {
     expect(deps.fake.last("chat.update")).toMatchObject({ channel: "G2", text: "Checklist reset. A new one follows when you choose your role." });
   });
 
-  it("a reset member who starts again gets the first message and the role question", async () => {
+  it("a reset member who starts again gets a new channel with the first message and the role question (FR-CH-021)", async () => {
     const deps = makeDeps();
-    await seed(deps);
+    await onboard(deps, "U2", "technical");
+    const oldChannel = getMemberChannel(deps.store, "U2")?.id;
     await handleReset(deps, { callerId: "UOP1", text: "reset <@U2|sam>" });
-    const posts = deps.fake.of("chat.postMessage").length;
     const creates = deps.fake.of("conversations.create").length;
-    await handleOnboard(deps, { callerId: "U2", text: "" });
-    expect(deps.fake.of("conversations.create")).toHaveLength(creates);
-    expect(deps.fake.of("chat.postMessage")).toHaveLength(posts + 2);
-    const message = deps.fake.last("chat.postMessage");
-    expect(message.channel).toBe(deps.store.get<{ channel_id: string }>("SELECT channel_id FROM member WHERE member_id = 'U2'")?.channel_id);
-    expect(JSON.stringify(message.blocks)).toContain("role_technical");
-    expect(JSON.stringify(message.blocks)).toContain("role_non-technical");
+    deps.fake.nameTaken = ["onboarding-copilot-u2"]; // the old channel still exists, so Slack refuses its name
+    const reply = await handleOnboard(deps, { callerId: "U2", text: "" });
+    expect(deps.fake.of("conversations.create")).toHaveLength(creates + 2); // the old name is refused, then the -2 name is made
+    const fresh = getMemberChannel(deps.store, "U2");
+    expect(fresh).toMatchObject({ state: "active" });
+    expect(fresh?.id).not.toBe(oldChannel);
+    expect(fresh?.name).toBe("onboarding-copilot-u2-2");
+    expect(reply).toContain(`<#${fresh?.id}>`);
+    const inNew = deps.fake.of("chat.postMessage").filter((c) => c.args.channel === fresh?.id);
+    expect(inNew).toHaveLength(2);
+    expect(JSON.stringify(inNew[1]?.args.blocks)).toContain("role_technical");
+    expect(JSON.stringify(inNew[1]?.args.blocks)).toContain("role_non-technical");
     expect(deps.store.get<{ role: string | null }>("SELECT role FROM member WHERE member_id = 'U2'")?.role).toBeNull();
+  });
+
+  it("many resets in a row each get a new channel (a tester resets again and again)", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    const seen = new Set([getMemberChannel(deps.store, "U2")?.name]);
+    for (let i = 0; i < 6; i++) {
+      await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+      deps.fake.nameTaken = [...seen] as string[];
+      expect(await handleOnboard(deps, { callerId: "U2", text: "" })).toContain("created your onboarding channel");
+      const name = getMemberChannel(deps.store, "U2")?.name;
+      expect(seen.has(name)).toBe(false);
+      seen.add(name);
+    }
+    expect(seen.size).toBe(7);
   });
 
   it("`/onboard-ch reset all` clears every test member and leaves the 20 seeded members alone (Scenario 9)", async () => {
@@ -113,7 +134,7 @@ describe("reset by an operator", () => {
     expect(seededRows()).toBe(seededBefore);
     expect(deps.store.all("SELECT 1 FROM member WHERE seeded = 0 AND (role IS NOT NULL OR checklist_ts IS NOT NULL OR completed_at IS NOT NULL)")).toHaveLength(0);
     expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id IN ('U2', 'U3', 'U4')")).toHaveLength(0);
-    expect(getMemberChannel(deps.store, "U3")).toEqual({ id: "G3", name: "onboarding-copilot-u3", state: "active" });
+    expect(getMemberChannel(deps.store, "U3")).toEqual({ id: "G3", name: "onboarding-copilot-u3", state: "lost" });
     // One surface reset per test member and nothing else: no post, no DM, no seeded member touched.
     expect(deps.fake.calls.slice(calls).map((c) => c.method)).toEqual(["chat.update", "chat.update", "chat.update"]);
   });
@@ -140,14 +161,14 @@ describe("/onboard-ch routing", () => {
   });
 });
 
-describe("reset keeps the channel, the canvas and the surface choice (FR-CH-021, Scenario 25)", () => {
+describe("reset detaches the channel so the next start makes a new one (FR-CH-021, Scenario 25)", () => {
   const stored = (deps: Deps, id: string) =>
     deps.store.get<Record<string, unknown>>(
       "SELECT channel_id, channel_name, channel_state, checklist_canvas_id, canvas_surface, role, completed_at, checklist_ts FROM member WHERE member_id = ?",
       id,
     );
 
-  it("the canvas surface is reset first, then everything but the channel and canvas columns is cleared; a later role reuses the canvas", async () => {
+  it("the canvas surface is reset first, then the member is cleared and the channel detached; a later start makes a new channel and a new canvas", async () => {
     const deps = makeDeps({ checklistSurface: "canvas" });
     await onboard(deps, "U2", "technical");
     expect(stored(deps, "U2")).toMatchObject({ channel_id: "C-1", checklist_canvas_id: "F-1", canvas_surface: "canvas" });
@@ -160,7 +181,7 @@ describe("reset keeps the channel, the canvas and the surface choice (FR-CH-021,
     expect(stored(deps, "U2")).toEqual({
       channel_id: "C-1",
       channel_name: "onboarding-copilot-u2",
-      channel_state: "active",
+      channel_state: "lost",
       checklist_canvas_id: "F-1",
       canvas_surface: "canvas",
       role: null,
@@ -171,10 +192,10 @@ describe("reset keeps the channel, the canvas and the surface choice (FR-CH-021,
 
     await handleOnboard(deps, { callerId: "U2", text: "" });
     await onboard(deps, "U2", "non-technical");
-    expect(deps.fake.of("conversations.canvases.create")).toHaveLength(1);
+    expect(deps.fake.of("conversations.canvases.create")).toHaveLength(2);
     expect(deps.logs.filter((l) => l.includes("canvas_degraded"))).toHaveLength(0);
-    expect(deps.fake.canvasBodies["F-1"]).toContain("- [ ] 1. Connect Claude to Slack");
-    expect(stored(deps, "U2")).toMatchObject({ checklist_canvas_id: "F-1", canvas_surface: "canvas", role: "non-technical" });
+    expect(stored(deps, "U2")).toMatchObject({ channel_id: "C-2", channel_state: "active", canvas_surface: "canvas", role: "non-technical" });
+    expect(stored(deps, "U2")?.checklist_canvas_id).not.toBe("F-1");
   });
 
   it("the surface reset runs before the store is cleared", async () => {
@@ -220,7 +241,7 @@ describe("reset keeps the channel, the canvas and the surface choice (FR-CH-021,
     };
     await expect(handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" })).resolves.toContain("Reset <@U2>");
     expect(deps.logs.some((l) => l.includes("reset_surface_failed") && l.includes("ratelimited"))).toBe(true);
-    expect(stored(deps, "U2")).toMatchObject({ role: null, channel_state: "active" });
+    expect(stored(deps, "U2")).toMatchObject({ role: null, channel_state: "lost" });
   });
 
   it("`reset all` continues past a member whose surface reset fails and counts every member cleared", async () => {
@@ -245,7 +266,7 @@ describe("reset keeps the channel, the canvas and the surface choice (FR-CH-021,
     const second = await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
     expect(second).toContain("Reset <@U2>");
     expect(deps.fake.of("chat.update")).toHaveLength(updates);
-    expect(stored(deps, "U2")).toMatchObject({ role: null, channel_id: "C-1", channel_state: "active" });
+    expect(stored(deps, "U2")).toMatchObject({ role: null, channel_id: "C-1", channel_state: "lost" });
   });
 
   it("a member with no checklist yet (no role) is cleared with no surface call", async () => {
@@ -254,6 +275,6 @@ describe("reset keeps the channel, the canvas and the surface choice (FR-CH-021,
     const calls = deps.fake.calls.length;
     await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
     expect(deps.fake.calls).toHaveLength(calls);
-    expect(stored(deps, "U2")).toMatchObject({ channel_id: "C-1", channel_state: "active" });
+    expect(stored(deps, "U2")).toMatchObject({ channel_id: "C-1", channel_state: "lost" });
   });
 });

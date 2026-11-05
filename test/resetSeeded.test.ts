@@ -68,7 +68,7 @@ describe("the operator reset leaves seeded rows alone and keeps the canvas colum
       role: null,
       checklist_ts: null,
       channel_id: "CLIVE",
-      channel_state: "active",
+      channel_state: "lost",
       checklist_canvas_id: "FLIVE",
       canvas_surface: "canvas",
     });

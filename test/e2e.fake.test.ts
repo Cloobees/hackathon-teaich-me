@@ -245,7 +245,7 @@ describe("end to end on the fake clients (BP-107)", () => {
     expect(row(deps, "I4")).toEqual({ status: "ticked", method: "validated", evidence_ref: "300.002" });
   });
 
-  it("an operator reset keeps the channel; the next start re-posts the welcome and role question in it with no second create", async () => {
+  it("an operator reset detaches the channel; the next start makes a new one with the welcome and role question and a second link DM", async () => {
     const deps = newDeps();
     await startAndChooseRole(deps);
     const claude = model();
@@ -257,19 +257,22 @@ describe("end to end on the fake clients (BP-107)", () => {
 
     const reset = await handleOnboard(deps, { callerId: "UOP1", text: `reset <@${MEMBER}>` });
     expect(reset).toContain(`Reset <@${MEMBER}>`);
-    expect(member(deps)).toMatchObject({ role: null, role_chosen_at: null, completed_at: null, checklist_ts: null, channel_id: CHANNEL, channel_name: "onboarding-copilot-sam-member", channel_state: "active" });
+    expect(member(deps)).toMatchObject({ role: null, role_chosen_at: null, completed_at: null, checklist_ts: null, channel_id: CHANNEL, channel_name: "onboarding-copilot-sam-member", channel_state: "lost" });
     expect(deps.store.all("SELECT * FROM checklist_item WHERE member_id = ?", MEMBER)).toHaveLength(0);
 
     const restart = await handleOnboard(deps, { callerId: MEMBER, text: "", triggerId: "TRIG2" });
-    expect(restart).toBe(`I have restarted your onboarding in <#${CHANNEL}>.`);
-    expect(deps.fake.of("conversations.create")).toHaveLength(1);
-    expect(deps.fake.of("conversations.invite")).toHaveLength(1);
-    expect([welcomes(), questions()]).toEqual([2, 2]);
-    expect(posts(deps).filter((p) => p.channel === DM)).toHaveLength(1); // the link DM is not sent again
-    expect([...targets(deps)]).toEqual([CHANNEL]);
+    const NEW = "C-2";
+    expect(restart).toBe(`I have created your onboarding channel: <#${NEW}>. Open it to start.`);
+    expect(deps.fake.of("conversations.create")).toHaveLength(2);
+    expect(deps.fake.of("conversations.invite")).toHaveLength(2);
+    expect([welcomes(), questions()]).toEqual([1, 1]); // the old channel gets nothing more
+    const inNew = posts(deps).filter((p) => p.channel === NEW);
+    expect(inNew.map((p) => p.text.includes("Fixture first message") || p.text.includes("Which describes you better?"))).toEqual([true, true]);
+    expect(posts(deps).filter((p) => p.channel === DM)).toHaveLength(2); // a link DM for the new channel
+    expect(member(deps)).toMatchObject({ channel_id: NEW, channel_state: "active" });
 
-    // The member can choose a role again in the same channel.
-    await handleRole(deps, { memberId: MEMBER, role: "technical", channel: CHANNEL, messageTs: "100.099" });
+    // The member chooses a role again, in the new channel.
+    await handleRole(deps, { memberId: MEMBER, role: "technical", channel: NEW, messageTs: "100.099" });
     expect(member(deps).role).toBe("technical");
     expect(deps.store.all("SELECT * FROM checklist_item WHERE member_id = ?", MEMBER)).toHaveLength(7);
   });

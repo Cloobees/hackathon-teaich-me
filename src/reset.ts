@@ -6,11 +6,17 @@ import { MENTION, RESET_OPERATOR_ONLY } from "./start.js";
 
 export const RESET_USAGE = "Usage: `/onboard-ch reset @member` or `/onboard-ch reset all` (operators only).";
 
+/** Marks the member's channel `lost` so the next start replaces it; the channel itself, and its messages, are left alone. */
+function detachChannel(deps: Deps, memberId: string): void {
+  const done = deps.store.run("UPDATE member SET channel_state = 'lost' WHERE member_id = ? AND channel_id IS NOT NULL AND channel_state <> 'lost'", memberId);
+  if (done > 0) deps.log("channel_detached", { member: memberId, outcome: "reset" });
+}
+
 /**
  * Resets one member (FR-CH-021): when a non-seeded member has a checklist, the surface goes back to its empty state first
  * (an error there is logged and never stops the reset), then the role, ticks, completion time and checklist message
- * reference are cleared. The channel id, name and state and the canvas id and surface choice are kept: the canvas is one
- * per channel, so a later role choice rewrites it. Returns whether the member was cleared; never throws.
+ * reference are cleared. The old channel is left in place but detached (state `lost`), so the next start creates a new
+ * channel instead of reusing it (FR-CH-021). Returns whether the member was cleared; never throws.
  */
 async function resetOne(deps: Deps, memberId: string): Promise<boolean> {
   try {
@@ -25,7 +31,9 @@ async function resetOne(deps: Deps, memberId: string): Promise<boolean> {
         deps.log("reset_surface_failed", { member: memberId, error: errorCode(error) });
       }
     }
-    return resetMember(deps.store, memberId);
+    const cleared = resetMember(deps.store, memberId);
+    if (cleared) detachChannel(deps, memberId);
+    return cleared;
   } catch (error) {
     deps.log("reset_failed", { member: memberId, error: errorCode(error) });
     return false;
@@ -49,7 +57,7 @@ export async function handleReset(deps: Deps, input: { callerId: string; text: s
     const cleared = await resetOne(deps, mention);
     deps.log("reset", { member: input.callerId, target: mention, outcome: cleared ? "reset" : "nothing_to_reset" });
     return cleared
-      ? `Reset <@${mention}>. Their role, checklist and ticks are cleared; earlier messages in the channel stay. \`/onboard-ch\` starts them again.`
+      ? `Reset <@${mention}>. Their role, checklist and ticks are cleared; the old channel and its messages stay. \`/onboard-ch\` starts them again in a new channel.`
       : `There is nothing to reset for <@${mention}>.`;
   }
   // One member at a time, so a failure for one never stops the rest.
@@ -59,6 +67,6 @@ export async function handleReset(deps: Deps, input: { callerId: string; text: s
   }
   deps.log("reset", { member: input.callerId, target: "all", count, outcome: count ? "reset" : "nothing_to_reset" });
   return count
-    ? `Reset ${count} test member${count === 1 ? "" : "s"}. Seeded cohort numbers are unchanged; earlier messages in the channel stay.`
+    ? `Reset ${count} test member${count === 1 ? "" : "s"}. Seeded cohort numbers are unchanged; the old channels and their messages stay.`
     : "There is nothing to reset: no test members have onboarding state.";
 }
