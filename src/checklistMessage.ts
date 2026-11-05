@@ -9,7 +9,7 @@ import type { Method, Role } from "./store.js";
 
 export { instructionButtons };
 
-const glossaryLine = (deps: Deps) => (deps.glossaryUrl ? `The glossary canvas: ${deps.glossaryUrl}` : "The glossary explains the Claude terms; ask me what a term means.");
+export const glossaryLine = (deps: Deps) => (deps.glossaryUrl ? `The glossary canvas: ${deps.glossaryUrl}` : "The glossary explains the Claude terms; ask me what a term means.");
 
 /** The checklist message: the glossary link, every item with its status, the first pending item highlighted, a help line. No instruction text. */
 export function renderChecklist(deps: Deps, role: Role, items: ItemDef[], rows: ChecklistRow[]): { text: string; blocks: Block[] } {

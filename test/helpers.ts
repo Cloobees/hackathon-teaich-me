@@ -41,6 +41,10 @@ export class FakeSlack {
   created: { id: string; name: string }[] = [];
   /** Canvas ids by channel id. */
   canvases: Record<string, string> = {};
+  /** Canvas markdown by canvas id; one line per task, as the real canvas stores each list item as its own section. */
+  canvasBodies: Record<string, string> = {};
+  /** Makes the next canvases.edit throw `canvas_editing_locked`, then clears itself. */
+  lockOnce = false;
   private channelSeq = 0;
   private canvasSeq = 0;
   private ts = 0;
@@ -82,6 +86,7 @@ export class FakeSlack {
           if (this.canvases[args.channel_id]) throw slackError("channel_canvas_already_exists");
           const canvasId = `F-${++this.canvasSeq}`;
           this.canvases[args.channel_id] = canvasId;
+          this.canvasBodies[canvasId] = args.document_content?.markdown ?? "";
           return { canvas_id: canvasId };
         },
       },
@@ -101,12 +106,37 @@ export class FakeSlack {
         lookup: async (args) => {
           this.calls.push({ method: "canvases.sections.lookup", args });
           if (this.failCanvas) throw slackError("canvas_disabled_for_team");
-          return { sections: [{ id: "temp:C:1" }] };
+          const body = this.canvasBodies[args.canvas_id];
+          if (body === undefined) throw slackError("canvas_not_found");
+          const needle = args.criteria.contains_text ?? "";
+          const sections = body
+            .split("\n")
+            .flatMap((line, index) => (line.includes(needle) ? [{ id: `temp:${args.canvas_id}:${index}` }] : []));
+          return { sections };
         },
       },
       edit: async (args) => {
         this.calls.push({ method: "canvases.edit", args });
         if (this.failCanvas) throw slackError("canvas_disabled_for_team");
+        if (this.lockOnce) {
+          this.lockOnce = false;
+          throw slackError("canvas_editing_locked");
+        }
+        const body = this.canvasBodies[args.canvas_id];
+        if (body === undefined) throw slackError("canvas_not_found");
+        if (args.changes.length !== 1) throw slackError("invalid_arguments");
+        const change = args.changes[0] as { operation?: string; section_id?: string; document_content?: { markdown?: string } };
+        const markdown = change.document_content?.markdown ?? "";
+        if (!change.section_id) {
+          this.canvasBodies[args.canvas_id] = markdown;
+          return {};
+        }
+        const lines = body.split("\n");
+        const [, canvas, index] = change.section_id.split(":");
+        const at = Number(index);
+        if (canvas !== args.canvas_id || !Number.isInteger(at) || at < 0 || at >= lines.length) throw slackError("section_not_found");
+        lines[at] = markdown;
+        this.canvasBodies[args.canvas_id] = lines.join("\n");
         return {};
       },
     },

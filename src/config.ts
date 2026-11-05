@@ -43,6 +43,8 @@ export interface CopilotConfig {
   harnessRepo?: string;
   /** Slack `app_id` of the Claude app (`A...`), for workspaces where the connector footer carries no `<@...>` mention. */
   claudeAppId?: string;
+  /** Where the checklist is drawn (CHECKLIST_SURFACE): `message` unless the value is exactly `canvas`. */
+  checklistSurface: "canvas" | "message";
 }
 
 /** Settings for the Onboarding Copilot. Throws `missing <NAME>` for the first required variable that is absent. */
@@ -68,6 +70,7 @@ export function loadCopilotConfig(env: NodeJS.ProcessEnv = process.env): Copilot
     botMention: env.BOT_MENTION || DEFAULT_BOT_MENTION,
     harnessRepo: env.HARNESS_REPO?.trim() || undefined,
     claudeAppId: env.CLAUDE_APP_ID?.trim() || undefined,
+    checklistSurface: env.CHECKLIST_SURFACE?.trim().toLowerCase() === "canvas" ? "canvas" : "message",
   };
 }
 

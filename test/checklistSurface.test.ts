@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRows, getRows } from "../src/checklist.js";
 import { selectSurface } from "../src/checklistSurface.js";
+import { canvasSurface, makeCanvasSurface } from "../src/checklistSurfaceCanvas.js";
 import { messageSurface } from "../src/checklistSurfaceMessage.js";
 import { makeDeps, slackError } from "./helpers.js";
 
@@ -159,5 +160,354 @@ describe("selectSurface", () => {
     expect(typeof surface.create).toBe("function");
     expect(typeof surface.update).toBe("function");
     expect(typeof surface.reset).toBe("function");
+  });
+});
+
+describe("selectSurface: canvas and message", () => {
+  const withSurface = (stored: string | null, config?: "canvas" | "message") => {
+    const deps = makeDeps({ checklistSurface: config });
+    deps.store.run("INSERT INTO member (member_id, started_by, channel_id, role, canvas_surface) VALUES ('U1', 'command', 'C-1', 'technical', ?)", stored);
+    return selectSurface(deps, "U1");
+  };
+  it("follows the config when canvas_surface is null", () => {
+    expect(withSurface(null, "canvas")).toBe(canvasSurface);
+    expect(withSurface(null, "message")).toBe(messageSurface);
+    expect(withSurface(null)).toBe(messageSurface);
+  });
+  it("a stored canvas_surface wins over the config", () => {
+    expect(withSurface("canvas", "message")).toBe(canvasSurface);
+    expect(withSurface("message", "canvas")).toBe(messageSurface);
+  });
+  it("an unknown member follows the config", () => {
+    expect(selectSurface(makeDeps({ checklistSurface: "canvas" }), "UNKNOWN")).toBe(canvasSurface);
+    expect(selectSurface(makeDeps(), "UNKNOWN")).toBe(messageSurface);
+  });
+});
+
+describe("canvas surface", () => {
+  const surface = makeCanvasSurface({ lockDelayMs: 0 });
+  type TestDeps = ReturnType<typeof makeDeps>;
+  const canvasMember = () => {
+    const deps = member({ glossaryUrl: GLOSSARY });
+    deps.checklistSurface = "canvas";
+    return deps;
+  };
+  const rows = (deps: TestDeps) => getRows(deps.store, "U1");
+  const tickRow = (deps: TestDeps, id: string) =>
+    deps.store.run("UPDATE checklist_item SET status = 'ticked', method = 'observed' WHERE member_id = 'U1' AND item_id = ?", id);
+  const stored = (deps: TestDeps) =>
+    deps.store.get<{ checklist_canvas_id: string | null; canvas_surface: string | null }>("SELECT checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'U1'");
+  const degraded = (deps: TestDeps) => deps.logs.filter((l) => l.includes("canvas_degraded"));
+  const canvasCalls = (deps: TestDeps) => deps.fake.calls.filter((c) => c.method.includes("canvas"));
+  const body = (deps: TestDeps) => (deps.fake.canvasBodies["F-1"] ?? "").split("\n");
+
+  describe("create", () => {
+    it("creates the canvas once with the glossary line first and one unticked line per item, stores id and surface, posts one pointer message, no pin", async () => {
+      const deps = canvasMember();
+      await expect(surface.create(deps, "U1", rows(deps))).resolves.toBe("canvas");
+
+      expect(deps.fake.of("conversations.canvases.create")).toHaveLength(1);
+      expect(stored(deps)).toEqual({ checklist_canvas_id: "F-1", canvas_surface: "canvas" });
+      const lines = body(deps);
+      expect(lines[0]).toBe(`The glossary canvas: ${GLOSSARY}`);
+      expect(lines[1]).toBe("- [ ] 1. Connect Claude to Slack");
+      expect(lines).toHaveLength(8);
+      expect(lines.slice(1).every((l) => /^- \[ \] \d\. /.test(l))).toBe(true);
+      const posts = deps.fake.of("chat.postMessage");
+      expect(posts).toHaveLength(1);
+      expect((posts[0]?.args as { channel: string }).channel).toBe("C-1");
+      expect((posts[0]?.args as { text: string }).text).toContain("Canvas tab");
+      expect(deps.fake.of("pins.add")).toHaveLength(0);
+      expect(checklistTs(deps)).toBeNull();
+    });
+
+    it("a re-role reuses the stored canvas id: no second create, one whole-body rewrite, no second pointer message", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      await surface.reset(deps, "U1");
+      await surface.create(deps, "U1", rows(deps));
+
+      expect(deps.fake.of("conversations.canvases.create")).toHaveLength(1);
+      const edits = deps.fake.of("canvases.edit").map((c) => c.args as { changes: Record<string, unknown>[] });
+      expect(edits).toHaveLength(2);
+      expect(edits.at(-1)?.changes[0]).not.toHaveProperty("section_id");
+      expect(body(deps)).toHaveLength(8);
+      expect(body(deps)[1]).toBe("- [ ] 1. Connect Claude to Slack");
+      expect(deps.fake.of("chat.postMessage")).toHaveLength(1);
+      expect(degraded(deps)).toHaveLength(0);
+    });
+
+    it("failCanvas at create degrades to the message surface: one canvas_degraded line, a pinned message, no canvas id", async () => {
+      const deps = canvasMember();
+      deps.fake.failCanvas = true;
+      await expect(surface.create(deps, "U1", rows(deps))).resolves.toBe("message");
+
+      expect(degraded(deps)).toHaveLength(1);
+      expect(degraded(deps)[0]).toContain("canvas_disabled_for_team");
+      expect(stored(deps)).toEqual({ checklist_canvas_id: null, canvas_surface: "message" });
+      expect(checklistTs(deps)).toBe("100.001");
+      expect(deps.fake.of("pins.add")).toHaveLength(1);
+      expect(deps.fake.of("chat.postMessage")).toHaveLength(1);
+    });
+
+    it("Scenario 11: after the degrade a tick makes no canvas call and writes no second log line", async () => {
+      const deps = canvasMember();
+      deps.fake.failCanvas = true;
+      await surface.create(deps, "U1", rows(deps));
+      const before = canvasCalls(deps).length;
+      tickRow(deps, "I1");
+      await selectSurface(deps, "U1").update(deps, "U1", rows(deps));
+      await surface.update(deps, "U1", rows(deps));
+
+      expect(canvasCalls(deps)).toHaveLength(before);
+      expect(degraded(deps)).toHaveLength(1);
+      expect(deps.fake.of("chat.update")).toHaveLength(2);
+    });
+
+    it("channel_canvas_already_exists with no stored id degrades the same way", async () => {
+      const deps = canvasMember();
+      deps.fake.canvases["C-1"] = "F-existing";
+      await expect(surface.create(deps, "U1", rows(deps))).resolves.toBe("message");
+      expect(degraded(deps)).toHaveLength(1);
+      expect(degraded(deps)[0]).toContain("channel_canvas_already_exists");
+      expect(stored(deps)?.canvas_surface).toBe("message");
+      expect(checklistTs(deps)).toBe("100.001");
+    });
+
+    it("a gone-channel error is logged, not thrown, and does not degrade", async () => {
+      const deps = canvasMember();
+      deps.slack.conversations.canvases.create = async () => {
+        throw slackError("channel_not_found");
+      };
+      await expect(surface.create(deps, "U1", rows(deps))).resolves.toBe("message");
+      expect(degraded(deps)).toHaveLength(0);
+      expect(deps.logs.some((l) => l.includes("channel_not_found"))).toBe(true);
+      expect(stored(deps)?.canvas_surface).toBeNull();
+    });
+
+    it("a member with no channel posts and creates nothing", async () => {
+      const deps = makeDeps({ checklistSurface: "canvas" });
+      deps.store.run("INSERT INTO member (member_id, started_by, role) VALUES ('U1', 'command', 'technical')");
+      await expect(surface.create(deps, "U1", [])).resolves.toBe("message");
+      expect(deps.fake.calls).toHaveLength(0);
+      expect(deps.logs.some((l) => l.includes("checklist_no_channel"))).toBe(true);
+    });
+  });
+
+  describe("update", () => {
+    it("looks up then replaces once per ticked item; the canvas shows [x] for ticked and [ ] for others; getContent is never used", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I1");
+      tickRow(deps, "I2");
+      await surface.update(deps, "U1", rows(deps));
+
+      expect(canvasCalls(deps).map((c) => c.method)).toEqual([
+        "conversations.canvases.create",
+        "canvases.sections.lookup",
+        "canvases.edit",
+        "canvases.sections.lookup",
+        "canvases.edit",
+      ]);
+      const lookups = deps.fake.of("canvases.sections.lookup").map((c) => c.args);
+      expect(lookups[0]).toEqual({ canvas_id: "F-1", criteria: { contains_text: "1. Connect Claude to Slack" } });
+      const edits = deps.fake.of("canvases.edit").map((c) => c.args as { canvas_id: string; changes: Record<string, unknown>[] });
+      for (const e of edits) expect(e.changes).toHaveLength(1);
+      expect(edits[0]?.changes[0]).toEqual({
+        operation: "replace",
+        section_id: "temp:F-1:1",
+        document_content: { type: "markdown", markdown: "- [x] 1. Connect Claude to Slack" },
+      });
+      const lines = body(deps);
+      expect(lines.slice(1, 3)).toEqual(["- [x] 1. Connect Claude to Slack", "- [x] 2. Connect Claude to Context Builder"]);
+      expect(lines.slice(3).every((l) => l.startsWith("- [ ] "))).toBe(true);
+      expect(lines[0]).toBe(`The glossary canvas: ${GLOSSARY}`);
+      expect(deps.fake.calls.some((c) => /getContent|files\.info|bookmarks/.test(c.method))).toBe(false);
+      expect(Object.keys(deps.slack.canvases)).not.toContain("getContent");
+      expect(deps.fake.of("chat.update")).toHaveLength(0);
+    });
+
+    it("an update with nothing ticked makes no canvas call", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      await surface.update(deps, "U1", rows(deps));
+      expect(deps.fake.of("canvases.edit")).toHaveLength(0);
+      expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(0);
+    });
+
+    it("a lookup miss rewrites the whole canvas once from the store, ignoring what the canvas holds, and stops", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      deps.fake.canvasBodies["F-1"] = "someone replaced everything";
+      tickRow(deps, "I1");
+      tickRow(deps, "I2");
+      await surface.update(deps, "U1", rows(deps));
+
+      expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(1);
+      const edits = deps.fake.of("canvases.edit").map((c) => c.args as { changes: Record<string, unknown>[] });
+      expect(edits).toHaveLength(1);
+      expect(edits[0]?.changes[0]).not.toHaveProperty("section_id");
+      const lines = body(deps);
+      expect(lines[0]).toBe(`The glossary canvas: ${GLOSSARY}`);
+      expect(lines.slice(1, 3)).toEqual(["- [x] 1. Connect Claude to Slack", "- [x] 2. Connect Claude to Context Builder"]);
+      expect(lines[3]).toBe("- [ ] 3. Set up a Claude Project");
+      expect(degraded(deps)).toHaveLength(0);
+    });
+
+    it("canvas_editing_locked once: waits, retries the same change and succeeds without degrading", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I1");
+      deps.fake.lockOnce = true;
+      await surface.update(deps, "U1", rows(deps));
+
+      const edits = deps.fake.of("canvases.edit");
+      expect(edits).toHaveLength(2);
+      expect(edits[1]?.args).toEqual(edits[0]?.args);
+      expect(body(deps)[1]).toBe("- [x] 1. Connect Claude to Slack");
+      expect(degraded(deps)).toHaveLength(0);
+    });
+
+    it("a lock that persists after one retry degrades", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I1");
+      deps.slack.canvases.edit = async () => {
+        throw slackError("canvas_editing_locked");
+      };
+      await surface.update(deps, "U1", rows(deps));
+      expect(degraded(deps)).toHaveLength(1);
+      expect(degraded(deps)[0]).toContain("canvas_editing_locked");
+    });
+
+    it("an edit failure part-way degrades once: the message surface posts and pins the checklist from the store, later ticks make no canvas call", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I1");
+      tickRow(deps, "I2");
+      const realEdit = deps.slack.canvases.edit;
+      let n = 0;
+      deps.slack.canvases.edit = async (args) => {
+        if (++n === 2) throw slackError("canvas_editing_failed");
+        return realEdit(args);
+      };
+      await expect(surface.update(deps, "U1", rows(deps))).resolves.toBeUndefined();
+
+      expect(degraded(deps)).toHaveLength(1);
+      expect(degraded(deps)[0]).toContain("canvas_editing_failed");
+      expect(stored(deps)?.canvas_surface).toBe("message");
+      expect(checklistTs(deps)).not.toBeNull();
+      expect(deps.fake.of("pins.add")).toHaveLength(1);
+      expect(JSON.stringify(deps.fake.last("chat.postMessage").blocks)).toContain("~1. Connect Claude to Slack~");
+
+      const before = canvasCalls(deps).length;
+      tickRow(deps, "I3");
+      await selectSurface(deps, "U1").update(deps, "U1", rows(deps));
+      expect(canvasCalls(deps)).toHaveLength(before);
+      expect(degraded(deps)).toHaveLength(1);
+      expect(deps.fake.of("chat.update")).toHaveLength(1);
+    });
+
+    it.each(["canvas_not_found", "canvas_deleted"])("a canvas deleted by a human (%s) degrades and does not throw", async (code) => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I1");
+      deps.slack.canvases.sections.lookup = async () => {
+        throw slackError(code);
+      };
+      await expect(surface.update(deps, "U1", rows(deps))).resolves.toBeUndefined();
+      expect(degraded(deps)).toHaveLength(1);
+      expect(degraded(deps)[0]).toContain(code);
+      expect(checklistTs(deps)).not.toBeNull();
+    });
+
+    it("a gone-channel error is logged and swallowed without degrading", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I1");
+      deps.slack.canvases.sections.lookup = async () => {
+        throw slackError("is_archived");
+      };
+      await expect(surface.update(deps, "U1", rows(deps))).resolves.toBeUndefined();
+      expect(degraded(deps)).toHaveLength(0);
+      expect(stored(deps)?.canvas_surface).toBe("canvas");
+    });
+
+    it("with no stored canvas id (and not degraded) it logs checklist_no_canvas and calls nothing", async () => {
+      const deps = canvasMember();
+      tickRow(deps, "I1");
+      await expect(surface.update(deps, "U1", rows(deps))).resolves.toBeUndefined();
+      expect(deps.fake.calls).toHaveLength(0);
+      expect(deps.logs.some((l) => l.includes("checklist_no_canvas"))).toBe(true);
+    });
+
+    it("item titles with markdown characters go into contains_text unchanged", async () => {
+      const deps = canvasMember();
+      const first = deps.items.items.find((i) => i.id === "I1");
+      if (first) first.name = "Connect *Claude* (to) [Slack] _now_";
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I1");
+      await surface.update(deps, "U1", rows(deps));
+      const args = deps.fake.of("canvases.sections.lookup")[0]?.args as { criteria: { contains_text: string } };
+      expect(args.criteria.contains_text).toBe("1. Connect *Claude* (to) [Slack] _now_");
+      expect(body(deps)[1]).toBe("- [x] 1. Connect *Claude* (to) [Slack] _now_");
+    });
+
+    it("two ticks racing run one after the other: no call of the second starts before the first finishes", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      tickRow(deps, "I1");
+      const first = rows(deps);
+      tickRow(deps, "I2");
+      const second = rows(deps);
+      const start = deps.fake.calls.length;
+      const slowLookup = deps.slack.canvases.sections.lookup;
+      deps.slack.canvases.sections.lookup = async (args) => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return slowLookup(args);
+      };
+      await Promise.all([surface.update(deps, "U1", first), surface.update(deps, "U1", second)]);
+
+      expect(deps.fake.calls.slice(start).map((c) => c.method)).toEqual([
+        "canvases.sections.lookup",
+        "canvases.edit",
+        "canvases.sections.lookup",
+        "canvases.edit",
+        "canvases.sections.lookup",
+        "canvases.edit",
+      ]);
+      expect(body(deps).slice(1, 3)).toEqual(["- [x] 1. Connect Claude to Slack", "- [x] 2. Connect Claude to Context Builder"]);
+    });
+  });
+
+  describe("reset", () => {
+    it("replaces the whole canvas with the reset text and keeps the canvas id", async () => {
+      const deps = canvasMember();
+      await surface.create(deps, "U1", rows(deps));
+      await surface.reset(deps, "U1");
+      const args = deps.fake.last("canvases.edit") as unknown as { changes: Record<string, unknown>[] };
+      expect(args.changes).toEqual([
+        { operation: "replace", document_content: { type: "markdown", markdown: "Checklist reset. A new one follows when you choose your role." } },
+      ]);
+      expect(deps.fake.canvasBodies["F-1"]).toBe("Checklist reset. A new one follows when you choose your role.");
+      expect(stored(deps)).toEqual({ checklist_canvas_id: "F-1", canvas_surface: "canvas" });
+    });
+
+    it("with no canvas it logs checklist_no_canvas and edits nothing", async () => {
+      const deps = canvasMember();
+      await surface.reset(deps, "U1");
+      expect(deps.fake.calls).toHaveLength(0);
+      expect(deps.logs.some((l) => l.includes("checklist_no_canvas"))).toBe(true);
+    });
+
+    it("on a degraded member it edits the message in place", async () => {
+      const deps = canvasMember();
+      deps.fake.failCanvas = true;
+      await surface.create(deps, "U1", rows(deps));
+      const before = canvasCalls(deps).length;
+      await surface.reset(deps, "U1");
+      expect(canvasCalls(deps)).toHaveLength(before);
+      expect(deps.fake.last("chat.update").text).toContain("Checklist reset");
+    });
   });
 });

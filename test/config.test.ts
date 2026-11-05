@@ -32,3 +32,20 @@ describe("HARNESS_REPO", () => {
     expect(loadCopilotConfig({ ...full, HARNESS_REPO: " synechron/harness " }).harnessRepo).toBe("synechron/harness");
   });
 });
+
+describe("CHECKLIST_SURFACE", () => {
+  it("defaults to message", () => {
+    expect(loadCopilotConfig(full).checklistSurface).toBe("message");
+    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: "" }).checklistSurface).toBe("message");
+  });
+  it("accepts canvas and message, trimmed and in any case", () => {
+    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: "canvas" }).checklistSurface).toBe("canvas");
+    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: " Canvas " }).checklistSurface).toBe("canvas");
+    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: "message" }).checklistSurface).toBe("message");
+  });
+  it("falls back to message for any other value, without throwing", () => {
+    for (const value of ["lists", "canvases", "1", "true"]) {
+      expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: value }).checklistSurface).toBe("message");
+    }
+  });
+});

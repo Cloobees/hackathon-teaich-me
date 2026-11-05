@@ -1,4 +1,5 @@
 import type { ChecklistRow } from "./checklist.js";
+import { canvasSurface } from "./checklistSurfaceCanvas.js";
 import { messageSurface } from "./checklistSurfaceMessage.js";
 import type { Deps } from "./deps.js";
 
@@ -12,7 +13,9 @@ export interface ChecklistSurface {
   reset(deps: Deps, memberId: string): Promise<void>;
 }
 
-// The canvas implementation and the CHECKLIST_SURFACE flag arrive in BP-103; until then every member gets the message.
-export function selectSurface(_deps: Deps, _memberId: string): ChecklistSurface {
-  return messageSurface;
+/** The member's stored `canvas_surface` wins; when it is unset, `CHECKLIST_SURFACE` decides (default `message`). */
+export function selectSurface(deps: Deps, memberId: string): ChecklistSurface {
+  const stored = deps.store.get<{ canvas_surface: string | null }>("SELECT canvas_surface FROM member WHERE member_id = ?", memberId)?.canvas_surface;
+  const choice = stored === "canvas" || stored === "message" ? stored : deps.checklistSurface;
+  return choice === "canvas" ? canvasSurface : messageSurface;
 }

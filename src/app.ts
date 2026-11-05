@@ -33,6 +33,7 @@ const depsFor = (client: unknown): Deps => ({
   operators: config.operatorIds,
   glossaryUrl: config.glossaryUrl,
   harnessRepo: config.harnessRepo,
+  checklistSurface: config.checklistSurface,
 });
 
 let claudeAppId: string | undefined;
