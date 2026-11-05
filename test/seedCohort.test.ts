@@ -49,6 +49,16 @@ describe("seedCohort", () => {
     expect(store.all("SELECT * FROM member WHERE seeded = 1")).toHaveLength(20);
     expect(store.all("SELECT * FROM member WHERE member_id = 'ULIVE'")).toHaveLength(1);
   });
+  it("leaves every channel column null for every seeded member (FR-CH-025, Scenario 27)", () => {
+    const store = openStore(":memory:");
+    seedCohort(store, config, now);
+    expect(store.all("SELECT * FROM member WHERE seeded = 1")).toHaveLength(20);
+    expect(
+      store.all(
+        "SELECT member_id FROM member WHERE channel_id IS NOT NULL OR channel_name IS NOT NULL OR channel_state IS NOT NULL OR checklist_canvas_id IS NOT NULL OR canvas_surface IS NOT NULL",
+      ),
+    ).toHaveLength(0);
+  });
   it("seeded ids are not Slack-shaped", () => {
     const store = openStore(":memory:");
     seedCohort(store, config, now);
