@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { handleOnboard, handleRole, handleTeamJoin, OPERATOR_ONLY, startOnboarding } from "../src/start.js";
-import { FIXTURE_LIBRARY, makeDeps } from "./helpers.js";
+import { applyTick } from "../src/checklistMessage.js";
+import { setMemberChannel } from "../src/store.js";
+import { FIXTURE_LIBRARY, itemStatuses, makeDeps, onboard, slackError } from "./helpers.js";
 
 const REAL_LIBRARY = fileURLToPath(new URL("../library", import.meta.url));
 
@@ -378,5 +380,159 @@ describe.each([
     expect(nonTechnical).toHaveLength(1);
     expect(nonTechnical[0]).toMatch(/any (other )?role/i);
     expect(nonTechnical[0]).toMatch(/repositor/i);
+  });
+});
+
+describe("a lost channel is replaced and the member's progress follows (FR-CH-024, Scenario 24)", () => {
+  const inChannel = (deps: Deps, channel: string) => allPosts(deps).filter((p) => p.channel === channel);
+
+  async function lostWithTwoTicks(deps: Deps): Promise<void> {
+    await onboard(deps, "U1", "technical");
+    await applyTick(deps, "U1", "I1", "observed", "100.5");
+    await applyTick(deps, "U1", "I2", "validated", "n1");
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "lost" });
+  }
+
+  it("creates a suffixed channel when the old name is taken, stores it, and shows the checklist with its two ticks and the next instruction, with no role question", async () => {
+    const deps = makeDeps();
+    await lostWithTwoTicks(deps);
+    deps.fake.nameTaken = ["onboarding-copilot-u1"];
+    const before = allPosts(deps).length;
+    const statuses = itemStatuses(deps, "U1");
+
+    expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("sent");
+
+    expect(deps.fake.created.at(-1)).toMatchObject({ id: "C-2", name: "onboarding-copilot-u1-2" });
+    expect(row(deps, "U1")).toMatchObject({ channel_id: "C-2", channel_state: "active", role: "technical" });
+    expect(itemStatuses(deps, "U1")).toEqual(statuses);
+
+    const fresh = allPosts(deps).slice(before);
+    const inNew = inChannel(deps, "C-2");
+    expect(inNew.length).toBeGreaterThanOrEqual(3);
+    expect(JSON.stringify(fresh)).not.toContain("role_technical");
+    expect(JSON.stringify(fresh)).not.toContain("Which describes you better");
+    const checklist = inNew.find((p) => p.text.includes("onboarding checklist"));
+    expect(checklist?.text).toContain("2 of 7");
+    expect(JSON.stringify(checklist)).toContain("~1. Connect Claude to Slack~");
+    expect(JSON.stringify(checklist)).toContain("~2. Connect Claude to Context Builder~");
+    expect(inNew.at(-1)?.text).toContain("*3. Set up a Claude Project*");
+    expect(inNew.at(-1)?.text).not.toContain("Done:");
+    expect(deps.fake.of("pins.add").at(-1)?.args).toMatchObject({ channel: "C-2" });
+    expect(deps.store.get<{ checklist_ts: string }>("SELECT checklist_ts FROM member WHERE member_id = 'U1'")?.checklist_ts).toBe(
+      (deps.fake.of("pins.add").at(-1)?.args as { timestamp: string }).timestamp,
+    );
+    expect(dmPosts(deps).at(-1)?.text).toContain("<#C-2>");
+  });
+
+  it("on the canvas surface the replacement builds a new canvas in the new channel, not a rewrite of the old canvas id", async () => {
+    const deps = makeDeps({ checklistSurface: "canvas" });
+    await lostWithTwoTicks(deps);
+    expect(deps.store.get("SELECT checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'U1'")).toEqual({ checklist_canvas_id: "F-1", canvas_surface: "canvas" });
+    deps.fake.nameTaken = ["onboarding-copilot-u1"];
+
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+
+    expect(deps.fake.of("conversations.canvases.create").at(-1)?.args).toMatchObject({ channel_id: "C-2" });
+    expect(deps.store.get("SELECT checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'U1'")).toEqual({ checklist_canvas_id: "F-2", canvas_surface: "canvas" });
+    expect(deps.fake.canvasBodies["F-2"]).toContain("- [x] 1. Connect Claude to Slack");
+    expect(deps.fake.canvasBodies["F-2"]).toContain("- [x] 2. Connect Claude to Context Builder");
+    expect(deps.fake.canvasBodies["F-2"]).toContain("- [ ] 3. Set up a Claude Project");
+    expect(deps.logs.filter((l) => l.includes("canvas_degraded"))).toHaveLength(0);
+  });
+
+  it("a member with no stored role gets the welcome and the role question in the new channel, like a new member", async () => {
+    const deps = makeDeps();
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "lost" });
+    const before = allPosts(deps).length;
+
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+
+    const inNew = inChannel(deps, "C-2");
+    expect(inNew).toHaveLength(2);
+    expect(JSON.stringify(inNew[1]?.blocks)).toContain("role_technical");
+    expect(allPosts(deps).length).toBeGreaterThan(before);
+    expect(row(deps, "U1")).toMatchObject({ channel_id: "C-2", channel_state: "active", role: null });
+  });
+
+  it("a completed member whose channel is replaced sees the checklist and no instruction", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "N1", "non-technical");
+    for (const id of ["I1", "I2", "I3", "I4", "I7"]) await applyTick(deps, "N1", id, "self-attested", null);
+    setMemberChannel(deps.store, "N1", { id: "C-1", name: "onboarding-copilot-n1", state: "lost" });
+    await startOnboarding(deps, { memberId: "N1", startedBy: "command" });
+    const inNew = inChannel(deps, "C-2");
+    expect(inNew.some((p) => p.text.includes("5 of 5"))).toBe(true);
+    expect(inNew.some((p) => p.text.includes("Next:") || p.text.includes("*Do this:*"))).toBe(false);
+  });
+
+  it("a second start after the replacement reuses the new channel: no third channel, no repeated welcome", async () => {
+    const deps = makeDeps();
+    await lostWithTwoTicks(deps);
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    const posts = allPosts(deps).length;
+    expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("existing");
+    expect(allPosts(deps)).toHaveLength(posts);
+    expect(deps.fake.of("conversations.create")).toHaveLength(2);
+  });
+});
+
+describe("the start flow posts are isolated (BP-098 review finding 3)", () => {
+  it("a failing welcome post does not stop the role question", async () => {
+    const deps = makeDeps();
+    const realPost = deps.slack.chat.postMessage;
+    let first = true;
+    deps.slack.chat.postMessage = async (args) => {
+      if (first && String(args.channel).startsWith("C-")) {
+        first = false;
+        throw slackError("ratelimited");
+      }
+      return realPost(args);
+    };
+    await expect(startOnboarding(deps, { memberId: "U1", startedBy: "command" })).resolves.toBe("sent");
+    expect(posts(deps)).toHaveLength(1);
+    expect(JSON.stringify(posts(deps)[0]?.blocks)).toContain("role_technical");
+    expect(deps.logs.some((l) => l.includes("channel_post_failed") && l.includes("welcome"))).toBe(true);
+  });
+
+  it("a failing role question is logged, the link DM still goes out and a second /onboard-ch posts both again", async () => {
+    const deps = makeDeps();
+    const realPost = deps.slack.chat.postMessage;
+    let failing = true;
+    deps.slack.chat.postMessage = async (args) => {
+      if (failing && String(args.channel).startsWith("C-") && String(args.text).startsWith("Which describes")) throw slackError("ratelimited");
+      return realPost(args);
+    };
+    await expect(startOnboarding(deps, { memberId: "U1", startedBy: "command" })).resolves.toBe("sent");
+    expect(dmPosts(deps)).toHaveLength(1);
+    expect(deps.logs.some((l) => l.includes("question_not_posted"))).toBe(true);
+
+    failing = false;
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    expect(posts(deps).filter((p) => JSON.stringify(p.blocks).includes("role_technical"))).toHaveLength(1);
+  });
+
+  it.each(["is_archived", "channel_not_found", "not_in_channel"])("a %s error on the role question marks the channel lost once and does not throw", async (code) => {
+    const deps = makeDeps();
+    const realPost = deps.slack.chat.postMessage;
+    deps.slack.chat.postMessage = async (args) => {
+      if (String(args.channel).startsWith("C-")) throw slackError(code);
+      return realPost(args);
+    };
+    await expect(startOnboarding(deps, { memberId: "U1", startedBy: "command" })).resolves.toBe("sent");
+    expect(row(deps, "U1")).toMatchObject({ channel_state: "lost" });
+    expect(deps.logs.filter((l) => l.includes('"event":"channel_lost"'))).toHaveLength(1);
+  });
+
+  it("a failing edit of the role message does not stop the checklist being created", async () => {
+    const deps = makeDeps();
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    deps.slack.chat.update = async () => {
+      throw slackError("ratelimited");
+    };
+    await handleRole(deps, { memberId: "U1", role: "technical", channel: "C-1", messageTs: "100.001" });
+    expect(row(deps, "U1")).toMatchObject({ role: "technical" });
+    expect(Object.keys(itemStatuses(deps, "U1"))).toHaveLength(7);
+    expect(posts(deps).some((p) => p.text.includes("onboarding checklist"))).toBe(true);
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { handleReset } from "../src/reset.js";
 import { handleOnboard, RESET_OPERATOR_ONLY } from "../src/start.js";
 import { getMemberChannel, setMemberChannel } from "../src/store.js";
-import { makeDeps, onboard } from "./helpers.js";
+import { makeDeps, onboard, slackError } from "./helpers.js";
 
 type Deps = ReturnType<typeof makeDeps>;
 
@@ -39,13 +39,14 @@ describe("reset by a non-operator (Scenario 10)", () => {
 });
 
 describe("reset by an operator", () => {
-  it.each(["reset", "reset foo"])("`/onboard %s` returns the two forms and changes nothing", async (text) => {
+  it.each(["reset", "reset foo"])("`/onboard-ch %s` returns the two forms and changes nothing", async (text) => {
     const deps = makeDeps();
     await seed(deps);
     const before = snapshot(deps);
     const reply = await handleReset(deps, { callerId: "UOP1", text });
-    expect(reply).toContain("/onboard reset @member");
-    expect(reply).toContain("/onboard reset all");
+    expect(reply).toContain("/onboard-ch reset @member");
+    expect(reply).toContain("/onboard-ch reset all");
+    expect(reply).not.toMatch(/[/]onboard( |`)/);
     expect(snapshot(deps)).toBe(before);
   });
 
@@ -59,6 +60,8 @@ describe("reset by an operator", () => {
     const calls = deps.fake.calls.length;
 
     const reply = await handleReset(deps, { callerId: "UOP1", text: "reset <@U2|sam>" });
+    expect(reply).toContain("earlier messages in the channel stay");
+    expect(reply).not.toContain("DM");
 
     expect(reply).toContain("<@U2>");
     expect(reply).toMatch(/reset/i);
@@ -68,7 +71,10 @@ describe("reset by an operator", () => {
     expect(deps.store.all("SELECT 1 FROM report_nonce WHERE member_id = 'U2'")).toHaveLength(1);
     expect(getMemberChannel(deps.store, "U2")).toEqual({ id: "G2", name: "onboarding-copilot-sam", state: "active" });
     expect(JSON.stringify(deps.store.all("SELECT * FROM member WHERE member_id = 'S1'"))).toBe(seededBefore);
-    expect(deps.fake.calls).toHaveLength(calls);
+    // The only Slack call is the surface going back to its empty state (FR-CH-021); nothing is posted and nobody is told.
+    const added = deps.fake.calls.slice(calls);
+    expect(added.map((c) => c.method)).toEqual(["chat.update"]);
+    expect(deps.fake.last("chat.update")).toMatchObject({ channel: "G2", text: "Checklist reset. A new one follows when you choose your role." });
   });
 
   it("a reset member who starts again gets the first message and the role question", async () => {
@@ -76,7 +82,9 @@ describe("reset by an operator", () => {
     await seed(deps);
     await handleReset(deps, { callerId: "UOP1", text: "reset <@U2|sam>" });
     const posts = deps.fake.of("chat.postMessage").length;
+    const creates = deps.fake.of("conversations.create").length;
     await handleOnboard(deps, { callerId: "U2", text: "" });
+    expect(deps.fake.of("conversations.create")).toHaveLength(creates);
     expect(deps.fake.of("chat.postMessage")).toHaveLength(posts + 2);
     const message = deps.fake.last("chat.postMessage");
     expect(message.channel).toBe(deps.store.get<{ channel_id: string }>("SELECT channel_id FROM member WHERE member_id = 'U2'")?.channel_id);
@@ -106,7 +114,8 @@ describe("reset by an operator", () => {
     expect(deps.store.all("SELECT 1 FROM member WHERE seeded = 0 AND (role IS NOT NULL OR checklist_ts IS NOT NULL OR completed_at IS NOT NULL)")).toHaveLength(0);
     expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id IN ('U2', 'U3', 'U4')")).toHaveLength(0);
     expect(getMemberChannel(deps.store, "U3")).toEqual({ id: "G3", name: "onboarding-copilot-u3", state: "active" });
-    expect(deps.fake.calls).toHaveLength(calls);
+    // One surface reset per test member and nothing else: no post, no DM, no seeded member touched.
+    expect(deps.fake.calls.slice(calls).map((c) => c.method)).toEqual(["chat.update", "chat.update", "chat.update"]);
   });
 
   it.each(["reset <@U9|nobody>", "reset <@U5>"])("`/onboard %s` (no row, or a seeded row) says there is nothing to reset and changes nothing", async (text) => {
@@ -128,5 +137,123 @@ describe("/onboard routing", () => {
     expect(await handleOnboard(deps, { callerId: "U1", text: "" })).toContain("onboarding channel");
     expect(await handleOnboard(deps, { callerId: "UOP1", text: "<@U3|sam>" })).toContain("<@U3>");
     expect(deps.store.get("SELECT 1 FROM member WHERE member_id = 'U3'")).toBeTruthy();
+  });
+});
+
+describe("reset keeps the channel, the canvas and the surface choice (FR-CH-021, Scenario 25)", () => {
+  const stored = (deps: Deps, id: string) =>
+    deps.store.get<Record<string, unknown>>(
+      "SELECT channel_id, channel_name, channel_state, checklist_canvas_id, canvas_surface, role, completed_at, checklist_ts FROM member WHERE member_id = ?",
+      id,
+    );
+
+  it("the canvas surface is reset first, then everything but the channel and canvas columns is cleared; a later role reuses the canvas", async () => {
+    const deps = makeDeps({ checklistSurface: "canvas" });
+    await onboard(deps, "U2", "technical");
+    expect(stored(deps, "U2")).toMatchObject({ channel_id: "C-1", checklist_canvas_id: "F-1", canvas_surface: "canvas" });
+    const calls = deps.fake.calls.length;
+
+    await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+
+    expect(deps.fake.calls.slice(calls).map((c) => c.method)).toEqual(["canvases.edit"]);
+    expect(deps.fake.canvasBodies["F-1"]).toContain("Checklist reset");
+    expect(stored(deps, "U2")).toEqual({
+      channel_id: "C-1",
+      channel_name: "onboarding-copilot-u2",
+      channel_state: "active",
+      checklist_canvas_id: "F-1",
+      canvas_surface: "canvas",
+      role: null,
+      completed_at: null,
+      checklist_ts: null,
+    });
+    expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id = 'U2'")).toHaveLength(0);
+
+    await handleOnboard(deps, { callerId: "U2", text: "" });
+    await onboard(deps, "U2", "non-technical");
+    expect(deps.fake.of("conversations.canvases.create")).toHaveLength(1);
+    expect(deps.logs.filter((l) => l.includes("canvas_degraded"))).toHaveLength(0);
+    expect(deps.fake.canvasBodies["F-1"]).toContain("- [ ] 1. Connect Claude to Slack");
+    expect(stored(deps, "U2")).toMatchObject({ checklist_canvas_id: "F-1", canvas_surface: "canvas", role: "non-technical" });
+  });
+
+  it("the surface reset runs before the store is cleared", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    let seen: unknown;
+    deps.slack.chat.update = async () => {
+      seen = deps.store.get("SELECT role, checklist_ts FROM member WHERE member_id = 'U2'");
+      return {};
+    };
+    await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+    expect(seen).toMatchObject({ role: "technical", checklist_ts: expect.any(String) });
+    expect(stored(deps, "U2")).toMatchObject({ role: null, checklist_ts: null });
+  });
+
+  it("a lost channel: the gone error is isolated, the member is still cleared and stays lost", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    deps.slack.chat.update = async () => {
+      throw slackError("is_archived");
+    };
+    const reply = await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+    expect(reply).toContain("Reset <@U2>");
+    expect(stored(deps, "U2")).toMatchObject({ channel_id: "C-1", channel_state: "lost", role: null, checklist_ts: null });
+    expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id = 'U2'")).toHaveLength(0);
+  });
+
+  it("a deleted canvas on a canvas member: the error is isolated, the member is cleared and the canvas columns stay", async () => {
+    const deps = makeDeps({ checklistSurface: "canvas" });
+    await onboard(deps, "U2", "technical");
+    deps.slack.canvases.edit = async () => {
+      throw slackError("canvas_deleted");
+    };
+    await expect(handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" })).resolves.toContain("Reset <@U2>");
+    expect(stored(deps, "U2")).toMatchObject({ role: null, channel_id: "C-1", checklist_canvas_id: "F-1" });
+  });
+
+  it("a non-gone Slack error is logged as reset_surface_failed and does not stop the reset", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    deps.slack.chat.update = async () => {
+      throw slackError("ratelimited");
+    };
+    await expect(handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" })).resolves.toContain("Reset <@U2>");
+    expect(deps.logs.some((l) => l.includes("reset_surface_failed") && l.includes("ratelimited"))).toBe(true);
+    expect(stored(deps, "U2")).toMatchObject({ role: null, channel_state: "active" });
+  });
+
+  it("`reset all` continues past a member whose surface reset fails and counts every member cleared", async () => {
+    const deps = makeDeps();
+    for (const id of ["U2", "U3", "U4"]) await onboard(deps, id, "technical");
+    const update = deps.slack.chat.update;
+    deps.slack.chat.update = async (args) => {
+      if (args.channel === "C-2") throw slackError("ratelimited");
+      return update(args);
+    };
+    const reply = await handleReset(deps, { callerId: "UOP1", text: "reset all" });
+    expect(reply).toContain("Reset 3 test members");
+    for (const id of ["U2", "U3", "U4"]) expect(stored(deps, id)).toMatchObject({ role: null, checklist_ts: null });
+    expect(deps.logs.filter((l) => l.includes("reset_surface_failed"))).toHaveLength(1);
+  });
+
+  it("a double reset clears twice with one surface call: the second finds no checklist", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U2", "technical");
+    await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+    const updates = deps.fake.of("chat.update").length;
+    const second = await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+    expect(second).toContain("Reset <@U2>");
+    expect(deps.fake.of("chat.update")).toHaveLength(updates);
+    expect(stored(deps, "U2")).toMatchObject({ role: null, channel_id: "C-1", channel_state: "active" });
+  });
+
+  it("a member with no checklist yet (no role) is cleared with no surface call", async () => {
+    const deps = makeDeps();
+    await handleOnboard(deps, { callerId: "U2", text: "" });
+    const calls = deps.fake.calls.length;
+    await handleReset(deps, { callerId: "UOP1", text: "reset <@U2>" });
+    expect(deps.fake.calls).toHaveLength(calls);
+    expect(stored(deps, "U2")).toMatchObject({ channel_id: "C-1", channel_state: "active" });
   });
 });

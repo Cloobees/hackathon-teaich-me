@@ -1,4 +1,4 @@
-// The member's private onboarding channel (FR-CH-001, 002, 004, 006, 023, 024). Not yet wired into the app.
+// The member's private onboarding channel (FR-CH-001, 002, 004, 006, 023, 024).
 import type { Deps } from "./deps.js";
 import type { SlackClient } from "./slack.js";
 import { getMemberChannel, setMemberChannel, type ChannelState, type Store } from "./store.js";
@@ -6,7 +6,7 @@ import { getMemberChannel, setMemberChannel, type ChannelState, type Store } fro
 const PREFIX = "onboarding-copilot-";
 const MAX_LENGTH = 80; // Slack's channel name limit
 const MAX_RETRIES = 3; // name_taken retries with a suffix; the next try uses the user id (Create and invite errors)
-const LOST_CODES = ["is_archived", "channel_not_found", "not_in_channel"];
+export const LOST_CODES = ["is_archived", "channel_not_found", "not_in_channel"];
 
 export type ChannelOutcome = "created" | "existing" | "reinvited" | "create_failed" | "invite_failed";
 
@@ -41,7 +41,7 @@ function slugOf(text: string): string {
 }
 
 /** The Slack error code: `data.error` on a platform error, else the message. */
-function errorCode(error: unknown): string {
+export function errorCode(error: unknown): string {
   const data = (error as { data?: { error?: unknown } } | null)?.data;
   if (typeof data?.error === "string") return data.error;
   return error instanceof Error ? error.message : String(error);
@@ -127,6 +127,8 @@ async function ensureOnce(deps: Deps, input: { memberId: string; startedBy: "eve
 
   store.run("INSERT OR IGNORE INTO member (member_id, started_by) VALUES (?, ?)", memberId, startedBy);
   setMemberChannel(store, memberId, { id: created.id, name: created.name, state: "invite_failed" });
+  // A replacement channel starts with no checklist message, canvas or canvas choice: those belonged to the old channel (FR-CH-024).
+  if (stored?.id) store.run("UPDATE member SET checklist_ts = NULL, checklist_canvas_id = NULL, canvas_surface = NULL WHERE member_id = ?", memberId);
   const code = await invite(deps, created.id, memberId);
   if (code) {
     deps.log("channel_invite_failed", { member: memberId, channel: created.id, error: code });
@@ -148,7 +150,23 @@ export function channelLink(channelId: string, teamId?: string): string {
   return `<#${channelId}> (<${url}|open your channel>)`;
 }
 
-/** Posts to the member's channel. A lost member channel (not any other channel id) sets `channel_state='lost'`, logs once and returns undefined (FR-CH-024). */
+/**
+ * Marks the member's current channel `lost` and logs `channel_lost` once. "marked": newly lost; "already": it was lost
+ * already (no second log); "other": `channel` is not the member's stored channel, so nothing changes (FR-CH-024).
+ */
+export function markChannelLost(deps: Deps, memberId: string, channel: string, code: string): "marked" | "already" | "other" {
+  const current = getMemberChannel(deps.store, memberId);
+  if (!current?.id || current.id !== channel) return "other";
+  if (current.state === "lost") return "already";
+  deps.store.run("UPDATE member SET channel_state = 'lost' WHERE member_id = ?", memberId);
+  deps.log("channel_lost", { member: memberId, channel, error: code });
+  return "marked";
+}
+
+/**
+ * Posts to the member's channel. A gone member channel (not any other channel id) sets `channel_state='lost'`, logs once
+ * and returns undefined (FR-CH-024). Any other error is rethrown: a caller that must not fail uses `safePost`.
+ */
 export async function channelPost(
   deps: Deps,
   memberId: string,
@@ -158,10 +176,56 @@ export async function channelPost(
     return await deps.slack.chat.postMessage(args);
   } catch (error) {
     const code = errorCode(error);
-    const isMemberChannel = getMemberChannel(deps.store, memberId)?.id === args.channel;
-    if (!isMemberChannel || !LOST_CODES.some((lost) => code.includes(lost))) throw error;
-    deps.store.run("UPDATE member SET channel_state = 'lost' WHERE member_id = ?", memberId);
-    deps.log("channel_lost", { member: memberId, channel: args.channel, error: code });
+    if (!LOST_CODES.some((lost) => code.includes(lost)) || markChannelLost(deps, memberId, args.channel, code) === "other") throw error;
     return undefined;
+  }
+}
+
+/**
+ * Runs one step of a flow whose database write is already done. An error is logged as `event` and swallowed, so the
+ * next step of the same flow still runs. Returns undefined on failure.
+ */
+export async function isolated<T>(deps: Deps, memberId: string, event: string, step: string, run: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await run();
+  } catch (error) {
+    deps.log(event, { member: memberId, step, error: errorCode(error) });
+    return undefined;
+  }
+}
+
+/** `channelPost` that never throws: a gone channel is marked lost, any other error is logged as `channel_post_failed`. Undefined means nothing was posted. */
+export const safePost = (deps: Deps, memberId: string, args: Parameters<SlackClient["chat"]["postMessage"]>[0], step: string) =>
+  isolated(deps, memberId, "channel_post_failed", step, () => channelPost(deps, memberId, args));
+
+/** The channel's stored owner when `user` is that owner, else undefined. Only the owner's own events count (FR-CH-023). */
+const ownerOf = (store: Store, channel: string, user: string | undefined): string | undefined =>
+  user ? store.get<{ member_id: string }>("SELECT member_id FROM member WHERE channel_id = ? AND member_id = ?", channel, user)?.member_id : undefined;
+
+/** `member_left_channel`: the stored owner leaving sets `member_left`. Anyone else, or a channel nobody owns, is ignored. Never throws. */
+export async function handleMemberLeft(deps: Deps, input: { channel: string; user?: string }): Promise<void> {
+  try {
+    const owner = ownerOf(deps.store, input.channel, input.user);
+    if (owner) deps.store.run("UPDATE member SET channel_state = 'member_left' WHERE member_id = ? AND channel_id = ?", owner, input.channel);
+    deps.log("member_left_channel", { member: owner, channel: input.channel, outcome: owner ? "member_left" : "ignored" });
+  } catch (error) {
+    deps.log("member_left_failed", { channel: input.channel, error: errorCode(error) });
+  }
+}
+
+/** `member_joined_channel`: the stored owner rejoining sets `active` from `member_left` or `invite_failed`; `lost` stays lost. Never throws. */
+export async function handleMemberJoined(deps: Deps, input: { channel: string; user?: string }): Promise<void> {
+  try {
+    const owner = ownerOf(deps.store, input.channel, input.user);
+    const changed =
+      owner !== undefined &&
+      deps.store.run(
+        "UPDATE member SET channel_state = 'active' WHERE member_id = ? AND channel_id = ? AND channel_state IN ('member_left', 'invite_failed')",
+        owner,
+        input.channel,
+      ) > 0;
+    deps.log("member_joined_channel", { member: owner, channel: input.channel, outcome: changed ? "active" : "ignored" });
+  } catch (error) {
+    deps.log("member_joined_failed", { channel: input.channel, error: errorCode(error) });
   }
 }

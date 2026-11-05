@@ -94,12 +94,44 @@ describe("message surface: update", () => {
     expect(JSON.stringify(args.blocks)).toContain("~1. Connect Claude to Slack~");
   });
 
-  it("with no checklist_ts it logs checklist_no_message and posts and updates nothing", async () => {
+  it("with no checklist_ts but a channel it posts and pins the checklist from the store's rows, stores checklist_ts and edits nothing (BP-098 review finding 2)", async () => {
     const deps = member();
+    deps.store.run("UPDATE checklist_item SET status = 'ticked', method = 'observed' WHERE member_id = 'U1' AND item_id = 'I1'");
+    await messageSurface.update(deps, "U1", getRows(deps.store, "U1"));
+
+    expect(deps.logs.some((l) => l.includes("checklist_no_message"))).toBe(false);
+    const posts = deps.fake.of("chat.postMessage");
+    expect(posts).toHaveLength(1);
+    expect((posts[0]?.args as { channel: string; text: string }).channel).toBe("C-1");
+    expect((posts[0]?.args as { text: string }).text).toContain("1 of 7");
+    expect(JSON.stringify(posts[0]?.args)).toContain("~1. Connect Claude to Slack~");
+    expect(checklistTs(deps)).toBe("100.001");
+    expect(deps.fake.of("pins.add")).toEqual([{ method: "pins.add", args: { channel: "C-1", timestamp: "100.001" } }]);
+    expect(deps.fake.of("chat.update")).toHaveLength(0);
+
+    await messageSurface.update(deps, "U1", getRows(deps.store, "U1"));
+    expect(deps.fake.of("chat.postMessage")).toHaveLength(1);
+    expect(deps.fake.of("chat.update")).toHaveLength(1);
+  });
+
+  it("with no checklist_ts and no role it logs checklist_no_message and posts nothing", async () => {
+    const deps = member();
+    deps.store.run("UPDATE member SET role = NULL WHERE member_id = 'U1'");
     await messageSurface.update(deps, "U1", getRows(deps.store, "U1"));
     expect(deps.logs.some((l) => l.includes("checklist_no_message"))).toBe(true);
     expect(deps.fake.of("chat.postMessage")).toHaveLength(0);
     expect(deps.fake.of("chat.update")).toHaveLength(0);
+  });
+
+  it.each(["is_archived", "channel_not_found", "not_in_channel"])("a %s error on the recreate marks the channel lost once and does not throw", async (code) => {
+    const deps = member();
+    deps.slack.chat.postMessage = async () => {
+      throw slackError(code);
+    };
+    await expect(messageSurface.update(deps, "U1", getRows(deps.store, "U1"))).resolves.toBeUndefined();
+    await expect(messageSurface.update(deps, "U1", getRows(deps.store, "U1"))).resolves.toBeUndefined();
+    expect(deps.store.get("SELECT channel_state FROM member WHERE member_id = 'U1'")).toEqual({ channel_state: "lost" });
+    expect(deps.logs.filter((l) => l.includes('"event":"channel_lost"'))).toHaveLength(1);
   });
 
   it("with no channel it logs checklist_no_message and does not throw", async () => {
@@ -118,6 +150,7 @@ describe("message surface: update", () => {
     };
     await expect(messageSurface.update(deps, "U1", getRows(deps.store, "U1"))).resolves.toBeUndefined();
     expect(deps.logs.some((l) => l.includes(code))).toBe(true);
+    expect(deps.store.get("SELECT channel_state FROM member WHERE member_id = 'U1'")).toEqual({ channel_state: "lost" });
   });
 
   it("an error that is not a gone-channel code still throws", async () => {

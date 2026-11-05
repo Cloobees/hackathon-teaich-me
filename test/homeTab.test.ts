@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { handleHomeOpened } from "../src/checklistMessage.js";
+import { setMemberChannel } from "../src/store.js";
 import { makeDeps, onboard, slackError } from "./helpers.js";
 
 type Published = { user_id: string; view: { type: string; blocks: unknown[] } };
@@ -21,6 +22,29 @@ describe("Home tab (FR-CH-020, Scenario 22)", () => {
     expect(view).toContain(`<#${channel}>`);
     expect(view).toContain("Open it to continue");
     expect(view).not.toMatch(/checklist|Role:|done\.|:white_check_mark:|:white_circle:|open_glossary/);
+  });
+
+  it.each(["lost", "member_left", "invite_failed"] as const)("with a %s channel: no link, the /onboard-ch hint instead (BP-101 review finding 1)", async (state) => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state });
+    deps.fake.calls.length = 0;
+
+    await handleHomeOpened(deps, "U1");
+
+    const view = viewText(deps.fake.of("views.publish")[0]!.args);
+    expect(view).toContain("/onboard-ch");
+    expect(view).not.toMatch(/<#|open your channel|Open it to continue/);
+  });
+
+  it("a rejoin brings the link back", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "member_left" });
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "active" });
+    deps.fake.calls.length = 0;
+    await handleHomeOpened(deps, "U1");
+    expect(viewText(deps.fake.of("views.publish")[0]!.args)).toContain("<#C-1>");
   });
 
   it("with no channel: one view that says to type /onboard-ch and holds no checklist text", async () => {

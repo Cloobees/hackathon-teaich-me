@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { channelLink, channelNameFor, channelPost, ensureMemberChannel, memberChannel } from "../src/channel.js";
+import { channelLink, channelNameFor, channelPost, ensureMemberChannel, isolated, markChannelLost, memberChannel, safePost } from "../src/channel.js";
 import { getMemberChannel, setMemberChannel } from "../src/store.js";
 import { makeDeps, slackError } from "./helpers.js";
 
@@ -340,5 +340,108 @@ describe("channelPost", () => {
     deps.slack.chat.postMessage = fail("ratelimited");
     await expect(channelPost(deps, "U1", { channel: "C-1", text: "hi" })).rejects.toThrow("ratelimited");
     expect(getMemberChannel(deps.store, "U1")?.state).toBe("active");
+  });
+});
+
+describe("channelPost once-only lost marking and safePost (FR-CH-024, DD-CH-008)", () => {
+  it("a second gone error on a channel that is already lost returns undefined, changes nothing and logs nothing", async () => {
+    const deps = makeDeps();
+    await start(deps);
+    deps.slack.chat.postMessage = async () => {
+      throw slackError("is_archived");
+    };
+    await channelPost(deps, "U1", { channel: "C-1", text: "a" });
+    deps.logs.length = 0;
+    await expect(channelPost(deps, "U1", { channel: "C-1", text: "b" })).resolves.toBeUndefined();
+    expect(getMemberChannel(deps.store, "U1")?.state).toBe("lost");
+    expect(deps.logs).toHaveLength(0);
+  });
+
+  it("markChannelLost: marked, already, and other for a channel that is not the member's", async () => {
+    const deps = makeDeps();
+    await start(deps);
+    expect(markChannelLost(deps, "U1", "C-OLD", "is_archived")).toBe("other");
+    expect(getMemberChannel(deps.store, "U1")?.state).toBe("active");
+    expect(markChannelLost(deps, "U1", "C-1", "is_archived")).toBe("marked");
+    expect(markChannelLost(deps, "U1", "C-1", "is_archived")).toBe("already");
+    expect(markChannelLost(deps, "U9", "C-1", "is_archived")).toBe("other");
+  });
+
+  it("safePost returns the response on success, undefined and one channel_post_failed line on any other error, and never throws", async () => {
+    const deps = makeDeps();
+    await start(deps);
+    await expect(safePost(deps, "U1", { channel: "C-1", text: "ok" }, "step")).resolves.toMatchObject({ ts: expect.any(String) });
+    deps.logs.length = 0;
+    deps.slack.chat.postMessage = async () => {
+      throw slackError("ratelimited");
+    };
+    await expect(safePost(deps, "U1", { channel: "C-1", text: "x" }, "step")).resolves.toBeUndefined();
+    expect(deps.logs).toHaveLength(1);
+    expect(deps.logs[0]).toContain("channel_post_failed");
+    expect(deps.logs[0]).toContain("ratelimited");
+    expect(getMemberChannel(deps.store, "U1")?.state).toBe("active");
+  });
+
+  it("safePost on a post to a channel that is not the member's logs and swallows a gone error without marking anything", async () => {
+    const deps = makeDeps();
+    await start(deps);
+    deps.slack.chat.postMessage = async () => {
+      throw slackError("is_archived");
+    };
+    await expect(safePost(deps, "U1", { channel: "C-OLD", text: "x" }, "step")).resolves.toBeUndefined();
+    expect(getMemberChannel(deps.store, "U1")?.state).toBe("active");
+    expect(deps.logs.some((l) => l.includes("channel_post_failed"))).toBe(true);
+  });
+
+  it("isolated returns the value or undefined and logs the step", async () => {
+    const deps = makeDeps();
+    await expect(isolated(deps, "U1", "ev", "s", async () => 5)).resolves.toBe(5);
+    await expect(
+      isolated(deps, "U1", "ev", "s", async () => {
+        throw slackError("boom");
+      }),
+    ).resolves.toBeUndefined();
+    expect(deps.logs).toHaveLength(1);
+    expect(deps.logs[0]).toContain('"step":"s"');
+  });
+});
+
+describe("a replacement channel clears the old channel's references (FR-CH-024, Scenario 24)", () => {
+  const refs = (deps: ReturnType<typeof makeDeps>) =>
+    deps.store.get("SELECT checklist_ts, checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'U1'");
+
+  it("checklist_ts, checklist_canvas_id and canvas_surface are cleared when a lost channel is replaced", async () => {
+    const deps = makeDeps();
+    await start(deps);
+    deps.store.run("UPDATE member SET checklist_ts = '1.1', checklist_canvas_id = 'F-OLD', canvas_surface = 'canvas', role = 'technical' WHERE member_id = 'U1'");
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "lost" });
+    const result = await start(deps);
+    expect(result).toMatchObject({ outcome: "created", channelId: "C-2" });
+    expect(refs(deps)).toEqual({ checklist_ts: null, checklist_canvas_id: null, canvas_surface: null });
+    expect(deps.store.get("SELECT role FROM member WHERE member_id = 'U1'")).toEqual({ role: "technical" });
+  });
+
+  it("the refs are also cleared when the member_left re-invite finds the channel gone", async () => {
+    const deps = makeDeps();
+    await start(deps);
+    deps.store.run("UPDATE member SET checklist_ts = '1.1', checklist_canvas_id = 'F-OLD', canvas_surface = 'message' WHERE member_id = 'U1'");
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "member_left" });
+    const invite = deps.slack.conversations.invite;
+    deps.slack.conversations.invite = async (args) => {
+      if (args.channel === "C-1") throw slackError("channel_not_found");
+      return invite(args);
+    };
+    await start(deps);
+    expect(refs(deps)).toEqual({ checklist_ts: null, checklist_canvas_id: null, canvas_surface: null });
+  });
+
+  it("a first channel (no earlier one) touches no refs, and a reinvite keeps them", async () => {
+    const deps = makeDeps();
+    deps.store.run("INSERT INTO member (member_id, checklist_ts, checklist_canvas_id, canvas_surface) VALUES ('U1', '9.9', 'F-9', 'canvas')");
+    await start(deps);
+    expect(refs(deps)).toEqual({ checklist_ts: "9.9", checklist_canvas_id: "F-9", canvas_surface: "canvas" });
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "member_left" });
+    await start(deps);
+    expect(refs(deps)).toEqual({ checklist_ts: "9.9", checklist_canvas_id: "F-9", canvas_surface: "canvas" });
   });
 });

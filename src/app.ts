@@ -6,6 +6,7 @@ import { loadCopilotConfig } from "./config.js";
 import type { Deps } from "./deps.js";
 import { createDashboardServer, listenOnLocalhost } from "./dashboardServer.js";
 import { log } from "./log.js";
+import { handleMemberJoined, handleMemberLeft } from "./channel.js";
 import { routeChannelMessage, routeMentionEvent, type ChannelMsg } from "./channelMessage.js";
 import type { SlackClient } from "./slack.js";
 import { handleOnboard, handleRole, handleTeamJoin } from "./start.js";
@@ -65,6 +66,15 @@ app.action(/^role_(technical|non-technical)$/, async ({ ack, body, action, clien
 app.event("app_home_opened", async ({ event, client }) => {
   if (event.tab !== "home") return;
   await handleHomeOpened(depsFor(client), event.user);
+});
+
+// The owner leaving or rejoining their channel (FR-CH-023). Both handlers ignore every other user and never throw.
+app.event("member_left_channel", async ({ event, client }) => {
+  await handleMemberLeft(depsFor(client), { channel: event.channel, user: event.user });
+});
+
+app.event("member_joined_channel", async ({ event, client }) => {
+  await handleMemberJoined(depsFor(client), { channel: event.channel, user: event.user });
 });
 
 app.action("open_glossary", async ({ ack }) => {

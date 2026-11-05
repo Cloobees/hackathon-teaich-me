@@ -1,4 +1,4 @@
-import { channelLink } from "./channel.js";
+import { channelLink, isolated, safePost } from "./channel.js";
 import { createRows, getRows, nextPending, tick, type ChecklistRow, type ItemDef, type TickResult } from "./checklist.js";
 import { selectSurface } from "./checklistSurface.js";
 import type { Deps } from "./deps.js";
@@ -35,14 +35,16 @@ export function renderChecklist(deps: Deps, role: Role, items: ItemDef[], rows: 
 }
 
 /**
- * The Home tab (FR-CH-020, DD-CH-009): one view with a link to the member's channel, or a pointer to `/onboard-ch`
- * for a member with no channel. It holds no checklist. A failing publish is logged and does not throw.
+ * The Home tab (FR-CH-020, DD-CH-009): one view with a link to the member's channel while it is `active`, or a pointer to
+ * `/onboard-ch` for a member with no channel or one that is `lost`, `member_left` or `invite_failed` (the command re-invites
+ * or replaces it). It holds no checklist. A failing publish is logged and does not throw.
  */
 export async function handleHomeOpened(deps: Deps, memberId: string): Promise<void> {
-  const member = deps.store.get<{ channel_id: string | null }>("SELECT channel_id FROM member WHERE member_id = ?", memberId);
-  const text = member?.channel_id
-    ? `Your onboarding channel: ${channelLink(member.channel_id)}. Open it to continue.`
-    : "Type `/onboard-ch` to start your onboarding.";
+  const member = deps.store.get<{ channel_id: string | null; channel_state: string | null }>("SELECT channel_id, channel_state FROM member WHERE member_id = ?", memberId);
+  const text =
+    member?.channel_id && member.channel_state === "active"
+      ? `Your onboarding channel: ${channelLink(member.channel_id)}. Open it to continue.`
+      : "Type `/onboard-ch` to start your onboarding.";
   const blocks: Block[] = [
     { type: "header", text: { type: "plain_text", text: "Onboarding Copilot" } },
     { type: "section", text: { type: "mrkdwn", text } },
@@ -62,39 +64,42 @@ export async function createChecklist(deps: Deps, memberId: string, role: Role):
     deps.log("checklist_no_channel", { member: memberId, outcome: "skipped" });
     return;
   }
-  await selectSurface(deps, memberId).create(deps, memberId, getRows(deps.store, memberId));
-  await sendInstruction(deps, memberId, member.channel_id, role);
+  // Each step is isolated: a failed checklist post still lets the first instruction go out (BP-098 review finding 2).
+  await isolated(deps, memberId, "checklist_failed", "surface_create", () => selectSurface(deps, memberId).create(deps, memberId, getRows(deps.store, memberId)));
+  await isolated(deps, memberId, "checklist_failed", "instruction", () => sendInstruction(deps, memberId, member.channel_id as string, role));
   deps.log("checklist_created", { member: memberId, role, outcome: "posted" });
 }
 
 /**
  * Every route ticks through here: tick, then the surface rewrites the checklist from the store's rows,
  * post a refusal in the channel, then send the completion message once or the next instruction.
+ * The tick is written before any Slack call, so each later step is isolated: a Slack error is logged and the next step of
+ * the same tick still runs, and `applyTick` never throws for a Slack failure (BP-098 review findings 1 and 3).
  */
 export async function applyTick(deps: Deps, memberId: string, itemId: string, method: Method, evidenceRef: string | null): Promise<TickResult> {
   const result = tick(deps.store, deps.items, memberId, itemId, method, evidenceRef, deps.now);
   const member = deps.store.get<{ role: Role | null; channel_id: string | null }>("SELECT role, channel_id FROM member WHERE member_id = ?", memberId);
   deps.log("tick", { member: memberId, item: itemId, method, outcome: result.status });
   if (!member?.role || !member.channel_id) return result;
+  const { role, channel_id: channel } = member;
 
   if (result.status === "refused") {
     const needed = deps.items.items.find((i) => i.id === result.needs);
     const attempted = deps.items.items.find((i) => i.id === itemId);
-    const label = (item: ItemDef | undefined, fallback: string) => (item ? itemLabel(deps, member.role as Role, item) : fallback);
-    await deps.slack.chat.postMessage({
-      channel: member.channel_id,
-      text: `Do *${label(needed, "the earlier step")}* first, then come back to *${label(attempted, "this step")}*.`,
-    });
+    const label = (item: ItemDef | undefined, fallback: string) => (item ? itemLabel(deps, role, item) : fallback);
+    await safePost(
+      deps,
+      memberId,
+      { channel, text: `Do *${label(needed, "the earlier step")}* first, then come back to *${label(attempted, "this step")}*.` },
+      "refusal",
+    );
   }
   if (result.status === "ticked") {
-    await selectSurface(deps, memberId).update(deps, memberId, getRows(deps.store, memberId));
+    await isolated(deps, memberId, "checklist_failed", "surface_update", () => selectSurface(deps, memberId).update(deps, memberId, getRows(deps.store, memberId)));
     if (result.completed) {
-      await deps.slack.chat.postMessage({
-        channel: member.channel_id,
-        text: `You have finished onboarding. ${glossaryLine(deps)} ${deps.items.help}`.trim(),
-      });
+      await safePost(deps, memberId, { channel, text: `You have finished onboarding. ${glossaryLine(deps)} ${deps.items.help}`.trim() }, "completion");
     } else {
-      await sendInstruction(deps, memberId, member.channel_id, member.role, result.ticked);
+      await isolated(deps, memberId, "checklist_failed", "instruction", () => sendInstruction(deps, memberId, channel, role, result.ticked));
     }
   }
   return result;

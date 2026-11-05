@@ -1,4 +1,4 @@
-import { channelPost } from "./channel.js";
+import { markChannelLost, safePost } from "./channel.js";
 import { itemsForRole, type ChecklistRow } from "./checklist.js";
 import { glossaryLine } from "./checklistMessage.js";
 import type { ChecklistSurface } from "./checklistSurface.js";
@@ -89,8 +89,10 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
       return true;
     } catch (error) {
       const code = codeOf(error);
-      if (GONE_CODES.includes(code)) deps.log("canvas_channel_gone", { member: memberId, outcome: code });
-      else degrade(deps, memberId, code);
+      if (GONE_CODES.includes(code)) {
+        const channel = target(deps, memberId)?.channel_id;
+        if (!channel || markChannelLost(deps, memberId, channel, code) !== "marked") deps.log("canvas_channel_gone", { member: memberId, outcome: code });
+      } else degrade(deps, memberId, code);
       return false;
     }
   };
@@ -123,7 +125,7 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
           });
           if (ok && canvasId) {
             deps.store.run("UPDATE member SET checklist_canvas_id = ?, canvas_surface = 'canvas' WHERE member_id = ?", canvasId, memberId);
-            await channelPost(deps, memberId, { channel, text: POINTER_TEXT });
+            await safePost(deps, memberId, { channel, text: POINTER_TEXT }, "canvas_pointer");
           }
         }
         if (!ok && isDegraded(deps, memberId)) return messageSurface.create(deps, memberId, rows);

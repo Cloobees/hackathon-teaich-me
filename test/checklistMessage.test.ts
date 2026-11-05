@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { applyTick, createChecklist, handleHomeOpened, renderChecklist } from "../src/checklistMessage.js";
 import { getRows, itemsForRole } from "../src/checklist.js";
-import { makeDeps, onboard, type Call } from "./helpers.js";
+import { makeDeps, onboard, slackError, type Call } from "./helpers.js";
 
 const text = (blocks: unknown[] | undefined) => JSON.stringify(blocks);
 
@@ -232,5 +232,161 @@ describe("Home tab (BP-102)", () => {
     const blocks = (deps.fake.of("views.publish").at(-1)?.args as unknown as { view: { blocks: unknown[] } }).view.blocks;
     expect(text(blocks)).toContain("/onboard-ch");
     expect(text(blocks)).not.toContain("Your onboarding checklist");
+  });
+});
+
+describe("a Slack error after the tick write is isolated (BP-098 review findings 1 to 3)", () => {
+  const states = (deps: ReturnType<typeof makeDeps>) =>
+    deps.store.get<{ channel_state: string }>("SELECT channel_state FROM member WHERE member_id = 'U1'")?.channel_state;
+  const itemStatus = (deps: ReturnType<typeof makeDeps>, id: string) =>
+    deps.store.get<{ status: string }>("SELECT status FROM checklist_item WHERE member_id = 'U1' AND item_id = ?", id)?.status;
+  const posts = (deps: ReturnType<typeof makeDeps>) => deps.fake.of("chat.postMessage").map((c) => String(c.args.text));
+
+  it("a failing surface update does not abort the next instruction, and the tick stays recorded", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    deps.slack.chat.update = async () => {
+      throw slackError("ratelimited");
+    };
+    const before = posts(deps).length;
+    await expect(applyTick(deps, "U1", "I1", "observed", "100.5")).resolves.toMatchObject({ status: "ticked" });
+
+    expect(itemStatus(deps, "I1")).toBe("ticked");
+    expect(posts(deps)).toHaveLength(before + 1);
+    expect(posts(deps).at(-1)).toContain("Next: *2. Connect Claude to Context Builder*");
+    expect(deps.logs.some((l) => l.includes("checklist_failed") && l.includes("surface_update") && l.includes("ratelimited"))).toBe(true);
+    expect(states(deps)).toBe("active");
+  });
+
+  it("a failing instruction post does not throw; the tick and the surface update are already done", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    const updates = deps.fake.of("chat.update").length;
+    deps.slack.chat.postMessage = async () => {
+      throw slackError("ratelimited");
+    };
+    await expect(applyTick(deps, "U1", "I1", "observed", "100.5")).resolves.toMatchObject({ status: "ticked" });
+
+    expect(itemStatus(deps, "I1")).toBe("ticked");
+    expect(deps.fake.of("chat.update")).toHaveLength(updates + 1);
+    expect(deps.logs.some((l) => l.includes("channel_post_failed") && l.includes("instruction") && l.includes("ratelimited"))).toBe(true);
+  });
+
+  it("the final tick: the completion message is still sent when the checklist update fails", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "non-technical");
+    for (const id of ["I1", "I2", "I3", "I4"]) await applyTick(deps, "U1", id, "self-attested", null);
+    deps.slack.chat.update = async () => {
+      throw slackError("ratelimited");
+    };
+    await expect(applyTick(deps, "U1", "I7", "self-attested", null)).resolves.toMatchObject({ status: "ticked", completed: true });
+
+    expect(deps.store.get<{ completed_at: string | null }>("SELECT completed_at FROM member WHERE member_id = 'U1'")?.completed_at).not.toBeNull();
+    expect(posts(deps).filter((t) => t.includes("finished onboarding"))).toHaveLength(1);
+  });
+
+  it("the final tick: a failing completion post does not throw, completion stays recorded and a re-tick sends nothing new", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "non-technical");
+    for (const id of ["I1", "I2", "I3", "I4"]) await applyTick(deps, "U1", id, "self-attested", null);
+    deps.slack.chat.postMessage = async () => {
+      throw slackError("ratelimited");
+    };
+    await expect(applyTick(deps, "U1", "I7", "self-attested", null)).resolves.toMatchObject({ completed: true });
+    expect(deps.store.get<{ completed_at: string | null }>("SELECT completed_at FROM member WHERE member_id = 'U1'")?.completed_at).not.toBeNull();
+    expect(deps.logs.some((l) => l.includes("channel_post_failed") && l.includes("completion"))).toBe(true);
+  });
+
+  it("each post is isolated on its own: a failing update still lets the instruction through, and a failing instruction still lets the next tick update", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    const realUpdate = deps.slack.chat.update;
+    const realPost = deps.slack.chat.postMessage;
+    deps.slack.chat.update = async () => {
+      throw slackError("ratelimited");
+    };
+    await applyTick(deps, "U1", "I1", "observed", null);
+    deps.slack.chat.update = realUpdate;
+    deps.slack.chat.postMessage = async () => {
+      throw slackError("ratelimited");
+    };
+    await applyTick(deps, "U1", "I2", "observed", null);
+    deps.slack.chat.postMessage = realPost;
+
+    const blocks = text(deps.fake.last("chat.update").blocks);
+    expect(blocks).toContain("~1. Connect Claude to Slack~");
+    expect(blocks).toContain("~2. Connect Claude to Context Builder~");
+  });
+
+  it("a refused tick whose refusal post fails does not throw", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    deps.slack.chat.postMessage = async () => {
+      throw slackError("ratelimited");
+    };
+    await expect(applyTick(deps, "U1", "I4", "self-attested", null)).resolves.toEqual({ status: "refused", needs: "I3" });
+    expect(deps.logs.some((l) => l.includes("channel_post_failed") && l.includes("refusal"))).toBe(true);
+  });
+
+  it.each(["is_archived", "channel_not_found", "not_in_channel"])("a %s error marks the channel lost once for the whole tick, and every step still ran", async (code) => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    const gone = async () => {
+      throw slackError(code);
+    };
+    deps.slack.chat.update = gone;
+    deps.slack.chat.postMessage = gone;
+    deps.logs.length = 0;
+
+    await expect(applyTick(deps, "U1", "I1", "observed", null)).resolves.toMatchObject({ status: "ticked" });
+
+    expect(states(deps)).toBe("lost");
+    expect(itemStatus(deps, "I1")).toBe("ticked");
+    expect(deps.logs.filter((l) => l.includes('"event":"channel_lost"'))).toHaveLength(1);
+    // A second tick on the lost channel posts nothing more to the log: it is already lost.
+    await expect(applyTick(deps, "U1", "I2", "observed", null)).resolves.toMatchObject({ status: "ticked" });
+    expect(deps.logs.filter((l) => l.includes('"event":"channel_lost"'))).toHaveLength(1);
+  });
+
+  it("createChecklist: a failing checklist post still sends the first instruction, and the rows exist", async () => {
+    const deps = makeDeps();
+    deps.store.run("INSERT INTO member (member_id, started_by, channel_id, channel_state, role) VALUES ('U1', 'command', 'C-1', 'active', 'technical')");
+    const realPost = deps.slack.chat.postMessage;
+    let first = true;
+    deps.slack.chat.postMessage = async (args) => {
+      if (first) {
+        first = false;
+        throw slackError("ratelimited");
+      }
+      return realPost(args);
+    };
+    await expect(createChecklist(deps, "U1", "technical")).resolves.toBeUndefined();
+
+    expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id = 'U1'")).toHaveLength(7);
+    expect(deps.store.get<{ checklist_ts: string | null }>("SELECT checklist_ts FROM member WHERE member_id = 'U1'")?.checklist_ts).toBeNull();
+    expect(posts(deps).at(-1)).toContain("1. Connect Claude to Slack");
+    expect(deps.logs.some((l) => l.includes("checklist_failed") && l.includes("surface_create"))).toBe(true);
+  });
+
+  it("after a failed checklist post the next tick posts and pins the checklist (the surface recreates it)", async () => {
+    const deps = makeDeps();
+    deps.store.run("INSERT INTO member (member_id, started_by, channel_id, channel_state) VALUES ('U1', 'command', 'C-1', 'active')");
+    deps.store.run("UPDATE member SET role = 'technical' WHERE member_id = 'U1'");
+    const realPost = deps.slack.chat.postMessage;
+    let first = true;
+    deps.slack.chat.postMessage = async (args) => {
+      if (first) {
+        first = false;
+        throw slackError("ratelimited");
+      }
+      return realPost(args);
+    };
+    await createChecklist(deps, "U1", "technical");
+    await applyTick(deps, "U1", "I1", "observed", null);
+
+    const checklist = deps.fake.of("chat.postMessage").find((c) => String(c.args.text).includes("onboarding checklist: 1 of 7"));
+    expect(checklist).toBeDefined();
+    expect(deps.fake.of("pins.add")).toHaveLength(1);
+    expect(deps.store.get<{ checklist_ts: string | null }>("SELECT checklist_ts FROM member WHERE member_id = 'U1'")?.checklist_ts).not.toBeNull();
   });
 });

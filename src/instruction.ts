@@ -1,3 +1,4 @@
+import { safePost } from "./channel.js";
 import { getRows, itemsForRole, nextPending, position, type ItemDef } from "./checklist.js";
 import type { Deps } from "./deps.js";
 import { instructionFor } from "./library.js";
@@ -77,6 +78,8 @@ export const itemLabel = (deps: Deps, role: Role, item: ItemDef): string => `${p
 /**
  * Posts one instruction message: the first pending item's instruction and its buttons, led by an acknowledgement
  * of the items just ticked when there are any (FR-CL-010, FR-CL-011). Posts nothing when no item is pending.
+ * The post goes through `safePost`: a Slack error is logged and never thrown, so the rest of the caller's flow still runs
+ * (BP-098 review findings 1 and 3). A failed post sends no skill zip, since the member has not seen the step it belongs to.
  */
 export async function sendInstruction(deps: Deps, memberId: string, channel: string, role: Role, ticked: string[] = []): Promise<void> {
   const items = itemsForRole(deps.items, role);
@@ -91,7 +94,8 @@ export async function sendInstruction(deps: Deps, memberId: string, channel: str
   const instruction = `${heading}\n${instructionText(deps, next, role, getMemberChannel(deps.store, memberId)?.id ?? channel)}`;
 
   const blocks: Block[] = [...(ack ? [mrkdwn(ack)] : []), ...splitMrkdwn(instruction).map(mrkdwn), { type: "actions", elements: instructionButtons(next) }];
-  await deps.slack.chat.postMessage({ channel, text: [ack, instruction].filter(Boolean).join("\n"), blocks });
+  const posted = await safePost(deps, memberId, { channel, text: [ack, instruction].filter(Boolean).join("\n"), blocks }, "instruction");
+  if (!posted) return;
   deps.log("instruction_sent", { member: memberId, item: next.id, outcome: "posted" });
   // The skill step needs the zip in hand, so it follows the I4 instruction (FR-VF-013).
   if (next.id === "I4") await sendSkillZip(deps, memberId);

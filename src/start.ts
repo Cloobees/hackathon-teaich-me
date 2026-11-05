@@ -1,4 +1,4 @@
-import { channelLink, ensureMemberChannel, memberChannel } from "./channel.js";
+import { channelLink, ensureMemberChannel, isolated, memberChannel, safePost } from "./channel.js";
 import { createChecklist } from "./checklistMessage.js";
 import type { Deps } from "./deps.js";
 import { glossaryBlock } from "./glossary.js";
@@ -50,17 +50,59 @@ async function runStart(deps: Deps, input: StartInput): Promise<StartResult> {
   const channel = ensured.channelId as string;
   const channelCreated = ensured.outcome === "created" || ensured.outcome === "reinvited";
 
-  // With a role stored the welcome and the role question never go out again, whatever the outcome (FR-CH-004).
-  // A member re-entering the channel still gets the one link DM; after a reset cleared the role both posts go out again.
-  if (deps.store.get<{ role: Role | null }>("SELECT role FROM member WHERE member_id = ?", memberId)?.role) {
+  const role = deps.store.get<{ role: Role | null }>("SELECT role FROM member WHERE member_id = ?", memberId)?.role;
+  if (role) {
+    // A replacement channel (the old one was lost) for a member whose role is fixed: the welcome, then the checklist drawn
+    // again from the store with its ticks and the next unticked item's instruction. The role question is not asked again (FR-CH-024).
+    if (ensured.outcome === "created") {
+      await postWelcome(deps, memberId, channel);
+      await createChecklist(deps, memberId, role);
+      await sendLinkDm(deps, memberId, channel, ensured.teamId);
+      deps.log("start", { member: memberId, started_by: startedBy, outcome: "replaced" });
+      return { outcome: "sent", channelCreated: true };
+    }
+    // With a role stored the welcome and the role question never go out again, whatever the outcome (FR-CH-004).
+    // A member re-entering the channel still gets the one link DM; after a reset cleared the role both posts go out again.
     if (ensured.outcome === "reinvited") await sendLinkDm(deps, memberId, channel, ensured.teamId);
     deps.log("start", { member: memberId, started_by: startedBy, outcome: "existing" });
     return { outcome: "existing", channelCreated };
   }
 
   const defs = roleDefinitions(deps.libraryDir);
-  // The welcome is its own message with no button, posted before the role message (FR-ST-008, DD-ST-010).
-  // It is read at each start, so an author's edit needs no deploy (FR-AS-008). With nothing to say it is skipped.
+  await postWelcome(deps, memberId, channel);
+  const question = `Which describes you better?\n• ${defs.technical}\n• ${defs.nonTechnical}`;
+  const asked = await safePost(
+    deps,
+    memberId,
+    {
+      channel,
+      text: question,
+      blocks: [
+        { type: "section", text: { type: "mrkdwn", text: question } },
+        {
+          type: "actions",
+          elements: [
+            { type: "button", action_id: "role_technical", value: "technical", style: "primary", text: { type: "plain_text", text: "Technical" } },
+            { type: "button", action_id: "role_non-technical", value: "non-technical", text: { type: "plain_text", text: "Non-technical" } },
+          ],
+        },
+      ],
+    },
+    "role_question",
+  );
+
+  if (channelCreated) await sendLinkDm(deps, memberId, channel, ensured.teamId);
+  // A failed role question is logged by `safePost`; `/onboard-ch` again posts the welcome and the question again.
+  deps.log("start", { member: memberId, started_by: startedBy, outcome: asked ? "sent" : "question_not_posted" });
+  return { outcome: "sent", channelCreated };
+}
+
+/**
+ * The welcome is its own message with no button, posted before the role message (FR-ST-008, DD-ST-010).
+ * It is read at each start, so an author's edit needs no deploy (FR-AS-008). With nothing to say it is skipped.
+ * A failed post is isolated so the role question still goes out.
+ */
+async function postWelcome(deps: Deps, memberId: string, channel: string): Promise<void> {
   const welcome = firstMessageText(deps.libraryDir, deps.glossaryUrl);
   // The blocks carry the glossary as a button; the text (with the plain link) is the notification fallback.
   const body = firstMessageText(deps.libraryDir);
@@ -68,32 +110,7 @@ async function runStart(deps: Deps, input: StartInput): Promise<StartResult> {
     ...(body ? [{ type: "section", text: { type: "mrkdwn", text: body } }] : []),
     ...(deps.glossaryUrl ? [glossaryBlock(deps.glossaryUrl)] : []),
   ];
-  if (welcome) {
-    await deps.slack.chat.postMessage({
-      channel,
-      text: welcome,
-      blocks: welcomeBlocks,
-    });
-  }
-  const question = `Which describes you better?\n• ${defs.technical}\n• ${defs.nonTechnical}`;
-  await deps.slack.chat.postMessage({
-    channel,
-    text: question,
-    blocks: [
-      { type: "section", text: { type: "mrkdwn", text: question } },
-      {
-        type: "actions",
-        elements: [
-          { type: "button", action_id: "role_technical", value: "technical", style: "primary", text: { type: "plain_text", text: "Technical" } },
-          { type: "button", action_id: "role_non-technical", value: "non-technical", text: { type: "plain_text", text: "Non-technical" } },
-        ],
-      },
-    ],
-  });
-
-  if (channelCreated) await sendLinkDm(deps, memberId, channel, ensured.teamId);
-  deps.log("start", { member: memberId, started_by: startedBy, outcome: "sent" });
-  return { outcome: "sent", channelCreated };
+  if (welcome) await safePost(deps, memberId, { channel, text: welcome, blocks: welcomeBlocks }, "welcome");
 }
 
 /** The one DM of the start flow: a link to the channel. A failure is logged and changes nothing else (FR-CH-005, FR-CH-026). */
@@ -146,12 +163,10 @@ export async function handleRole(deps: Deps, input: { memberId: string; role: Ro
   const current = deps.store.get<{ role: Role }>("SELECT role FROM member WHERE member_id = ?", memberId)?.role ?? role;
 
   const text = `You are set up as *${current}*.`;
-  await deps.slack.chat.update({
-    channel,
-    ts: messageTs,
-    text,
-    blocks: [{ type: "section", text: { type: "mrkdwn", text } }],
-  });
+  // The role is stored: a failed edit of the question must not stop the checklist from being created.
+  await isolated(deps, memberId, "role_update_failed", "role_message", () =>
+    deps.slack.chat.update({ channel, ts: messageTs, text, blocks: [{ type: "section", text: { type: "mrkdwn", text } }] }),
+  );
   deps.log("role", { member: memberId, role: current, outcome: stored ? "stored" : "unchanged" });
   if (stored) await createChecklist(deps, memberId, current);
 }
