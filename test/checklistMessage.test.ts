@@ -66,7 +66,7 @@ describe("checklist message", () => {
     }
   });
 
-  it("pins the checklist once, publishes no Home view and leaves pin_refused null (Scenario 8)", async () => {
+  it("pins the checklist once and publishes no Home view, at creation or after a tick (Scenario 8)", async () => {
     const deps = makeDeps();
     await onboard(deps, "U1", "technical");
     const ts = deps.store.get<{ checklist_ts: string }>("SELECT checklist_ts FROM member WHERE member_id = 'U1'")?.checklist_ts;
@@ -74,30 +74,25 @@ describe("checklist message", () => {
     expect(deps.fake.of("pins.add")).toHaveLength(1);
     expect(deps.fake.of("pins.add")[0]?.args).toEqual({ channel: "C-1", timestamp: ts });
     expect(deps.fake.of("views.publish")).toHaveLength(0);
-    expect(deps.store.get<{ pin_refused: number | null }>("SELECT pin_refused FROM member WHERE member_id = 'U1'")?.pin_refused).toBeNull();
 
     await applyTick(deps, "U1", "I1", "observed", "100.5");
     expect(deps.fake.of("views.publish")).toHaveLength(0);
   });
 
-  it("a refused pin sets pin_refused and publishes the checklist blocks to the Home tab, again after a tick (Scenario 9)", async () => {
+  it("a refused pin shows no Home view, keeps the checklist message and still edits it after a tick (Scenario 9)", async () => {
     const deps = makeDeps();
     deps.fake.failPin = true;
     await onboard(deps, "U1", "technical");
-    const checklist = deps.fake.of("chat.postMessage").find((c) => String(c.args.text).includes("onboarding checklist"))?.args as { blocks: unknown[] };
+    const ts = deps.store.get<{ checklist_ts: string }>("SELECT checklist_ts FROM member WHERE member_id = 'U1'")?.checklist_ts;
 
-    expect(deps.store.get<{ pin_refused: number }>("SELECT pin_refused FROM member WHERE member_id = 'U1'")?.pin_refused).toBe(1);
-    expect(deps.fake.of("views.publish")).toHaveLength(1);
-    expect(deps.fake.of("views.publish")[0]?.args).toEqual({ user_id: "U1", view: { type: "home", blocks: checklist.blocks } });
+    expect(ts).toBeTruthy();
+    expect(deps.fake.of("views.publish")).toHaveLength(0);
+    expect(deps.logs.some((l) => l.includes("pin_failed"))).toBe(true);
 
     await applyTick(deps, "U1", "I1", "observed", "100.5");
-    const update = deps.fake.last("chat.update");
-    expect(deps.fake.of("views.publish")).toHaveLength(2);
-    const home = deps.fake.of("views.publish")[1]?.args as { user_id: string; view: { type: string; blocks: unknown[] } };
-    expect(home.user_id).toBe("U1");
-    expect(home.view.type).toBe("home");
-    expect(home.view.blocks).toEqual(update.blocks);
-    expect(text(home.view.blocks)).toContain("~1. Connect Claude to Slack~");
+    expect(deps.fake.of("views.publish")).toHaveLength(0);
+    expect(deps.fake.last("chat.update").ts).toBe(ts);
+    expect(text(deps.fake.last("chat.update").blocks)).toContain("~1. Connect Claude to Slack~");
   });
 
   it("the checklist has no glossary line when no glossary URL is set", async () => {

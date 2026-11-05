@@ -45,10 +45,10 @@ describe("position (Scenario 12)", () => {
 });
 
 describe("reset (FR-CL-014, Scenario 14)", () => {
-  /** A member with a role, a DM, a posted checklist, a ticked item, a nonce row, a stored report channel, completion and a refused pin. */
+  /** A member with a role, a DM, a posted checklist, a ticked item, a nonce row, a stored report channel and completion. */
   function started(store: Store, id: string, seeded = 0) {
     store.run(
-      "INSERT INTO member (member_id, role, role_chosen_at, dm_channel_id, checklist_ts, completed_at, pin_refused, seeded, report_channel_name, report_channel_id) VALUES (?, 'technical', 't', ?, '100.1', 't', 1, ?, ?, ?)",
+      "INSERT INTO member (member_id, role, role_chosen_at, dm_channel_id, checklist_ts, completed_at, seeded, report_channel_name, report_channel_id) VALUES (?, 'technical', 't', ?, '100.1', 't', ?, ?, ?)",
       id,
       `D-${id}`,
       seeded,
@@ -60,7 +60,7 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
     store.run("INSERT INTO report_nonce (nonce, member_id, item_id, issued_at) VALUES (?, ?, 'I2', 't')", `n-${id}`, id);
   }
   const memberRow = (store: Store, id: string) =>
-    store.get<Record<string, unknown>>("SELECT role, role_chosen_at, dm_channel_id, checklist_ts, completed_at, pin_refused FROM member WHERE member_id = ?", id);
+    store.get<Record<string, unknown>>("SELECT role, role_chosen_at, dm_channel_id, checklist_ts, completed_at FROM member WHERE member_id = ?", id);
   const channelOf = (store: Store, id: string) => getReportChannel(store, id);
   const rowCount = (store: Store, table: string, id: string) =>
     store.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table} WHERE member_id = ?`, id)?.n;
@@ -72,7 +72,7 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
     resetMember(store, "T1");
     expect(rowCount(store, "checklist_item", "T1")).toBe(0);
     expect(rowCount(store, "report_nonce", "T1")).toBe(1);
-    expect(memberRow(store, "T1")).toEqual({ role: null, role_chosen_at: null, dm_channel_id: "D-T1", checklist_ts: null, completed_at: null, pin_refused: null });
+    expect(memberRow(store, "T1")).toEqual({ role: null, role_chosen_at: null, dm_channel_id: "D-T1", checklist_ts: null, completed_at: null });
     expect(channelOf(store, "T1")).toEqual({ name: "onboarding-copilot-T1", id: "G-T1" });
     expect(rowCount(store, "checklist_item", "T2")).toBe(7);
     expect(rowCount(store, "report_nonce", "T2")).toBe(1);
@@ -83,7 +83,7 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
     resetMember(store, "S1");
     expect(rowCount(store, "checklist_item", "S1")).toBe(7);
     expect(rowCount(store, "report_nonce", "S1")).toBe(1);
-    expect(memberRow(store, "S1")).toMatchObject({ role: "technical", checklist_ts: "100.1", completed_at: "t", pin_refused: 1 });
+    expect(memberRow(store, "S1")).toMatchObject({ role: "technical", checklist_ts: "100.1", completed_at: "t" });
     expect(channelOf(store, "S1")).toEqual({ name: "onboarding-copilot-S1", id: "G-S1" });
   });
   it("resetAll clears every unseeded member, leaves seeded ones, and returns the count", () => {
@@ -95,7 +95,7 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
     for (const id of ["T1", "T2"]) {
       expect(rowCount(store, "checklist_item", id)).toBe(0);
       expect(rowCount(store, "report_nonce", id)).toBe(1);
-      expect(memberRow(store, id)).toMatchObject({ role: null, completed_at: null, pin_refused: null });
+      expect(memberRow(store, id)).toMatchObject({ role: null, completed_at: null });
       expect(channelOf(store, id)).toEqual({ name: `onboarding-copilot-${id}`, id: `G-${id}` });
     }
     expect(rowCount(store, "checklist_item", "S1")).toBe(7);

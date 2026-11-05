@@ -72,7 +72,7 @@ export function resetMember(store: Store, memberId: string): boolean {
   return store.transaction(() => {
     const cleared =
       store.run(
-        "UPDATE member SET role = NULL, role_chosen_at = NULL, completed_at = NULL, checklist_ts = NULL, pin_refused = NULL WHERE member_id = ? AND seeded = 0",
+        "UPDATE member SET role = NULL, role_chosen_at = NULL, completed_at = NULL, checklist_ts = NULL WHERE member_id = ? AND seeded = 0",
         memberId,
       ) > 0;
     if (cleared) {
