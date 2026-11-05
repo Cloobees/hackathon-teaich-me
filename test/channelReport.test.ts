@@ -262,3 +262,21 @@ describe("withClaudeMark", () => {
     expect(withClaudeMark(text, APP, APP)).toBe(text);
   });
 });
+
+describe("an I2 email as Slack delivers it (I2 email bug)", () => {
+  it("a block whose email arrives as a mailto link ticks I2 validated and posts no failure", async () => {
+    const deps = await ready();
+    const text = i2Block().replace("email: sam@example.com", "email: <mailto:sam@example.com|sam@example.com>");
+    await report(deps, text, "1700000000.000200");
+    expect(row(deps, "I2")).toMatchObject({ status: "ticked", method: "validated" });
+    expect(deps.fake.of("chat.postMessage").some((c) => /not your own Context Builder/.test(String(c.args.text)))).toBe(false);
+  });
+
+  it("a failure logs whether the Slack email was known, with no address", async () => {
+    const deps = await ready();
+    await report(deps, i2Block().replace("sam@example.com", "other@example.com"), "1.9");
+    const line = deps.logs.find((l) => l.includes('"i2-email"')) ?? "";
+    expect(line).toContain('"member_email_known":true');
+    expect(line).not.toContain("example.com");
+  });
+});

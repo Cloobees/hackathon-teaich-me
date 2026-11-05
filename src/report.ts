@@ -30,6 +30,19 @@ export interface ParsedReport {
 // The Slack connector appends this to the last line of a message it posts (observed 2026-11-02).
 const CONNECTOR_SUFFIX = /\s*\*Sent using\*\s*<@([A-Z0-9]+)>\s*$/;
 
+/**
+ * A field value as the member's Claude meant it. Slack rewrites an email in a posted message as `<mailto:a@b|a@b>`, and
+ * Claude may add backticks, bold or a markdown link; none of that is part of the value.
+ */
+export function tidyValue(raw: string): string {
+  let value = raw.trim();
+  const slackMail = /^<mailto:([^|>]+)(?:\|[^>]*)?>$/i.exec(value);
+  const mdLink = /^\[([^\]]*)\]\(([^)]*)\)$/.exec(value);
+  if (slackMail) value = slackMail[1] as string;
+  else if (mdLink) value = (mdLink[2] as string).replace(/^mailto:/i, "") || (mdLink[1] as string);
+  return value.replace(/^[`*_"'<\s]+|[`*_"'>\s]+$/g, "").trim();
+}
+
 /** Fixed grammar: a `COPILOT-REPORT v<N>` line, then `key: value` lines. Code fences are ignored; the connector's trailing "Sent using" is removed and reported. */
 export function parseReport(text: string): ParsedReport | undefined {
   const markId = CONNECTOR_SUFFIX.exec(text)?.[1];
@@ -40,7 +53,7 @@ export function parseReport(text: string): ParsedReport | undefined {
   for (const line of lines.slice(start + 1)) {
     const match = /^([a-z_0-9]+): ?(.*)$/.exec(line);
     if (!match) break;
-    fields[match[1] as string] = (match[2] as string).trim();
+    fields[match[1] as string] = tidyValue(match[2] as string);
   }
   return { version: Number((lines[start] as string).slice("COPILOT-REPORT v".length)), fields, viaClaude: markId !== undefined, markId };
 }
@@ -79,7 +92,10 @@ export function validateReport(text: string, ctx: ValidateContext): Validation {
 
   if (item === "I2") {
     const expected = ctx.memberEmail?.toLowerCase();
-    if (!expected || f.email?.toLowerCase() !== expected) {
+    if (!expected) {
+      return fail("i2-email", "I could not read your email from your Slack profile, so I cannot match the report to you. Use *I did it* for this step and tell an operator.");
+    }
+    if (f.email?.toLowerCase() !== expected) {
       return fail("i2-email", "The email in the block is not your own Context Builder account. Ask your Claude to read it from your USER scope and post the report again.");
     }
     const activity = Date.parse(f.last_activity ?? "");

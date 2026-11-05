@@ -59,7 +59,7 @@ export async function handleChannelReport(deps: Deps, input: { channel: string; 
     harnessRepo: deps.harnessRepo,
   });
   if (!result.ok) {
-    deps.log("report", { member: owner.member_id, outcome: result.rule });
+    deps.log("report", { member: owner.member_id, outcome: result.rule, member_email_known: Boolean(email) });
     await postInChannel(deps, owner.member_id, input.channel, result.message);
     return;
   }

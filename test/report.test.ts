@@ -152,3 +152,30 @@ describe("I5 repo against HARNESS_REPO (Scenario 15, data contract harness_repo)
     }
   });
 });
+
+describe("values as Slack and Claude format them (I2 email bug)", () => {
+  const wrapped = [
+    ["Slack's mailto link", "<mailto:sam@example.com|sam@example.com>"],
+    ["a mailto link with a different label", "<mailto:Sam@Example.com|Sam>"],
+    ["backticks", "`sam@example.com`"],
+    ["bold", "*sam@example.com*"],
+    ["a markdown link", "[sam@example.com](mailto:sam@example.com)"],
+  ] as const;
+  for (const [name, email] of wrapped) {
+    it(`an I2 email as ${name} matches the member's email`, () => {
+      expect(validateReport(i2({ email }), ctx)).toEqual({ ok: true, item: "I2" });
+    });
+  }
+  it("a wrapped email for another account still fails", () => {
+    expect(validateReport(i2({ email: "<mailto:other@example.com|other@example.com>" }), ctx)).toMatchObject({ rule: "i2-email" });
+  });
+  it("a last_activity time in backticks or bold is read", () => {
+    expect(validateReport(i2({ last_activity: "`2026-10-26T10:12:00Z`" }), ctx).ok).toBe(true);
+    expect(validateReport(i2({ last_activity: "*2026-10-26T10:12:00Z*" }), ctx).ok).toBe(true);
+  });
+  it("an unknown member email gets its own message that does not blame the report", () => {
+    const result = validateReport(i2(), { ...ctx, memberEmail: undefined });
+    expect(result).toMatchObject({ ok: false, rule: "i2-email" });
+    expect((result as { message: string }).message).toContain("could not read your email");
+  });
+});
