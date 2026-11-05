@@ -602,3 +602,49 @@ describe("the start flow posts are isolated (BP-098 review finding 3)", () => {
     expect(posts(deps).some((p) => p.text.includes("onboarding checklist"))).toBe(true);
   });
 });
+
+describe("the glossary bookmark (FR-CH-028)", () => {
+  const URL = "https://example.slack.com/docs/T1/F1";
+  const bookmarks = (deps: Deps) => deps.fake.of("bookmarks.add").map((c) => c.args);
+
+  it("a new channel gets one link bookmark to the glossary canvas, before the welcome", async () => {
+    const deps = makeDeps({ glossaryUrl: URL });
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    expect(bookmarks(deps)).toEqual([{ channel_id: "C-1", title: "Onboarding Glossary", type: "link", link: URL, emoji: ":book:" }]);
+    const order = deps.fake.calls.map((c) => c.method);
+    expect(order.indexOf("bookmarks.add")).toBeLessThan(order.indexOf("chat.postMessage"));
+    expect(deps.logs.some((l) => l.includes('"glossary_bookmarked"'))).toBe(true);
+  });
+
+  it("no GLOSSARY_CANVAS_URL means no bookmark call", async () => {
+    const deps = makeDeps();
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    expect(bookmarks(deps)).toHaveLength(0);
+  });
+
+  it("a second start that reuses the channel adds no second bookmark", async () => {
+    const deps = makeDeps({ glossaryUrl: URL });
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    expect(bookmarks(deps)).toHaveLength(1);
+  });
+
+  it("a replacement channel gets its own bookmark", async () => {
+    const deps = makeDeps({ glossaryUrl: URL });
+    await onboard(deps, "U1", "technical");
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "lost" });
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    expect(bookmarks(deps).map((b) => b.channel_id)).toEqual(["C-1", "C-2"]);
+  });
+
+  it("a failing bookmark (missing scope) is logged once and the welcome, role question and DM still go out", async () => {
+    const deps = makeDeps({ glossaryUrl: URL });
+    deps.fake.failBookmark = true;
+    const outcome = await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    expect(outcome).toBe("sent");
+    expect(deps.logs.filter((l) => l.includes('"bookmark_failed"'))).toHaveLength(1);
+    expect(deps.logs.some((l) => l.includes('"glossary_bookmarked"'))).toBe(false);
+    expect(posts(deps)).toHaveLength(2);
+    expect(dmPosts(deps)).toHaveLength(1);
+  });
+});

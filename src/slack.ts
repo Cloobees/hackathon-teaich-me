@@ -25,6 +25,7 @@ export interface SlackClient {
     edit(args: { canvas_id: string; changes: Record<string, unknown>[] }): Promise<unknown>;
   };
   pins: { add(args: { channel: string; timestamp: string }): Promise<unknown> };
+  bookmarks: { add(args: { channel_id: string; title: string; type: "link"; link: string; emoji?: string }): Promise<unknown> };
   views: { publish(args: { user_id: string; view: { type: "home"; blocks: Block[] } }): Promise<unknown> };
   files: {
     uploadV2(args: { channel_id: string; file: Buffer; filename: string; initial_comment?: string }): Promise<unknown>;

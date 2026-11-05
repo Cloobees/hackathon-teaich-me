@@ -35,6 +35,7 @@ oauth_config:
       - files:write
       - groups:write
       - canvases:read
+      - bookmarks:write
   pkce_enabled: false
 settings:
   event_subscriptions:

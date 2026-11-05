@@ -23,15 +23,14 @@ describe("manifest.yml carries the channel variant delta (Scenario 29)", () => {
   const scopes = manifest.oauth_config.scopes.bot;
   const events = manifest.settings.event_subscriptions.bot_events;
 
-  it("adds the scopes groups:write and canvases:read and keeps all 16 original scopes", () => {
+  it("adds the scopes groups:write, canvases:read and bookmarks:write and keeps all 16 original scopes", () => {
     expect(ORIGINAL_SCOPES).toHaveLength(16);
-    expect(scopes).toEqual(expect.arrayContaining(["groups:write", "canvases:read", ...ORIGINAL_SCOPES]));
+    expect(scopes).toEqual(expect.arrayContaining(["groups:write", "canvases:read", "bookmarks:write", ...ORIGINAL_SCOPES]));
   });
   it("adds no scope the variant does not use", () => {
-    expect(scopes).not.toContain("bookmarks:write");
     expect(scopes).not.toContain("files:read");
     expect(scopes).not.toContain("pins:read");
-    expect([...scopes].sort()).toEqual([...ORIGINAL_SCOPES, "groups:write", "canvases:read"].sort());
+    expect([...scopes].sort()).toEqual([...ORIGINAL_SCOPES, "groups:write", "canvases:read", "bookmarks:write"].sort());
   });
   it("adds the event member_left_channel and keeps the 7 original events", () => {
     expect(ORIGINAL_EVENTS).toHaveLength(7);

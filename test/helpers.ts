@@ -30,6 +30,7 @@ export class FakeSlack {
   failList = false;
   failUpload = false;
   failPin = false;
+  failBookmark = false;
   failCreate = false;
   failInvite = false;
   failCanvas = false;
@@ -144,6 +145,13 @@ export class FakeSlack {
       add: async (args) => {
         this.calls.push({ method: "pins.add", args });
         if (this.failPin) throw slackError("channel_not_found");
+        return {};
+      },
+    },
+    bookmarks: {
+      add: async (args) => {
+        this.calls.push({ method: "bookmarks.add", args });
+        if (this.failBookmark) throw slackError("missing_scope");
         return {};
       },
     },

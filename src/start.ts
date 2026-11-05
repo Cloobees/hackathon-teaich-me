@@ -49,6 +49,8 @@ async function runStart(deps: Deps, input: StartInput): Promise<StartResult> {
   }
   const channel = ensured.channelId as string;
   const channelCreated = ensured.outcome === "created" || ensured.outcome === "reinvited";
+  // Only a channel the app just made gets the bookmark; a reused or re-entered one already has it.
+  if (ensured.outcome === "created") await bookmarkGlossary(deps, memberId, channel);
 
   const role = deps.store.get<{ role: Role | null }>("SELECT role FROM member WHERE member_id = ?", memberId)?.role;
   if (role) {
@@ -118,6 +120,19 @@ async function postWelcome(deps: Deps, memberId: string, channel: string): Promi
     ...(deps.glossaryUrl ? [glossaryBlock(deps.glossaryUrl)] : []),
   ];
   if (welcome) await safePost(deps, memberId, { channel, text: welcome, blocks: welcomeBlocks }, "welcome");
+}
+
+/**
+ * Adds the glossary canvas to the new channel's bookmark bar (FR-CH-028). Needs the `bookmarks:write` scope and a set
+ * `GLOSSARY_CANVAS_URL`; without either it is skipped or logged as `bookmark_failed`, and the start carries on.
+ */
+async function bookmarkGlossary(deps: Deps, memberId: string, channel: string): Promise<void> {
+  if (!deps.glossaryUrl) return;
+  const link = deps.glossaryUrl;
+  const added = await isolated(deps, memberId, "bookmark_failed", "glossary_bookmark", () =>
+    deps.slack.bookmarks.add({ channel_id: channel, title: "Onboarding Glossary", type: "link", link, emoji: ":book:" }),
+  );
+  if (added !== undefined) deps.log("glossary_bookmarked", { member: memberId, channel });
 }
 
 /** The one DM of the start flow: a link to the channel. A failure is logged and changes nothing else (FR-CH-005, FR-CH-026). */
