@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { channelLink, channelNameFor, channelPost, ensureMemberChannel, memberChannel } from "../src/channel.js";
 import { getMemberChannel, setMemberChannel } from "../src/store.js";
-import { makeDeps } from "./helpers.js";
+import { makeDeps, slackError } from "./helpers.js";
 
 const start = (deps: ReturnType<typeof makeDeps>, memberId = "U1") => ensureMemberChannel(deps, { memberId, startedBy: "command" });
 const rowCount = (deps: ReturnType<typeof makeDeps>) => deps.store.get<{ n: number }>("SELECT COUNT(*) AS n FROM member")?.n;
@@ -17,6 +17,13 @@ describe("channelNameFor", () => {
     expect(channelNameFor("Ada Lovelace", "U1", 1)).toBe("onboarding-copilot-ada-lovelace-2");
     expect(channelNameFor("Ada Lovelace", "U1", 3)).toBe("onboarding-copilot-ada-lovelace-4");
     expect(channelNameFor("Ada Lovelace", "UABC9", 4)).toBe("onboarding-copilot-uabc9");
+  });
+
+  it("never repeats a name across attempts, with or without a profile name", () => {
+    for (const profile of [undefined, "Ada Lovelace"]) {
+      const names = [0, 1, 2, 3, 4].map((attempt) => channelNameFor(profile, "UABC9", attempt));
+      expect(new Set(names).size).toBe(5);
+    }
   });
 
   it("stays within 80 characters including the suffix", () => {
@@ -92,7 +99,7 @@ describe("ensureMemberChannel", () => {
 
   it("returns create_failed when the user id name is taken too", async () => {
     const deps = makeDeps();
-    deps.fake.nameTaken = ["onboarding-copilot-u1", "onboarding-copilot-u1-2", "onboarding-copilot-u1-3", "onboarding-copilot-u1-4", "onboarding-copilot-u1"];
+    deps.fake.nameTaken = ["onboarding-copilot-u1", "onboarding-copilot-u1-2", "onboarding-copilot-u1-3", "onboarding-copilot-u1-4", "onboarding-copilot-u1-5"];
     const result = await start(deps);
     expect(deps.fake.of("conversations.create")).toHaveLength(5);
     expect(result.outcome).toBe("create_failed");
@@ -195,6 +202,65 @@ describe("ensureMemberChannel", () => {
     expect(getMemberChannel(deps.store, "U1")?.state).toBe("invite_failed");
   });
 
+  it("races: two concurrent calls for one member create one channel and share the result", async () => {
+    const deps = makeDeps();
+    const [a, b] = await Promise.all([start(deps), start(deps)]);
+    expect(deps.fake.of("conversations.create")).toHaveLength(1);
+    expect(deps.fake.of("conversations.invite")).toHaveLength(1);
+    expect(a).toEqual(b);
+    expect(a.outcome).toBe("created");
+    expect((await start(deps)).outcome).toBe("existing");
+  });
+
+  it("races: concurrent calls for different members do not share a result", async () => {
+    const deps = makeDeps();
+    const [a, b] = await Promise.all([start(deps, "U1"), start(deps, "U2")]);
+    expect(deps.fake.of("conversations.create")).toHaveLength(2);
+    expect(a.channelId).not.toBe(b.channelId);
+  });
+
+  for (const code of ["is_archived", "channel_not_found", "not_in_channel"]) {
+    it(`Scenario 24: a re-invite failing with ${code} marks the channel lost and creates a replacement in the same call`, async () => {
+      const deps = makeDeps();
+      await start(deps);
+      setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "member_left" });
+      const invite = deps.slack.conversations.invite;
+      deps.slack.conversations.invite = async (args) => {
+        if (args.channel === "C-1") throw slackError(code);
+        return invite(args);
+      };
+      const result = await start(deps);
+      expect(result).toMatchObject({ outcome: "created", channelId: "C-2" });
+      expect(deps.fake.of("conversations.create")).toHaveLength(2);
+      expect(getMemberChannel(deps.store, "U1")).toEqual({ id: "C-2", name: "onboarding-copilot-u1", state: "active" });
+      expect(rowCount(deps)).toBe(1);
+    });
+  }
+
+  it("Scenario 24: an invite_failed channel that is then archived is replaced too", async () => {
+    const deps = makeDeps();
+    deps.fake.failInvite = true;
+    await start(deps);
+    deps.slack.conversations.invite = async (args) => {
+      if (args.channel === "C-1") throw slackError("is_archived");
+      return {};
+    };
+    expect(await start(deps)).toMatchObject({ outcome: "created", channelId: "C-2" });
+    expect(getMemberChannel(deps.store, "U1")?.state).toBe("active");
+  });
+
+  it("Scenario 24: a lost-code failure on the replacement's own invite stays invite_failed on the new channel", async () => {
+    const deps = makeDeps();
+    await start(deps);
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "member_left" });
+    deps.slack.conversations.invite = async () => {
+      throw slackError("is_archived");
+    };
+    const result = await start(deps);
+    expect(result).toMatchObject({ outcome: "invite_failed", channelId: "C-2" });
+    expect(getMemberChannel(deps.store, "U1")).toEqual({ id: "C-2", name: "onboarding-copilot-u1", state: "invite_failed" });
+  });
+
   it("Scenario 24: a lost channel is replaced with a suffixed name when the old name is taken", async () => {
     const deps = makeDeps();
     await start(deps);
@@ -219,11 +285,16 @@ describe("memberChannel", () => {
 });
 
 describe("channelLink", () => {
-  it("Scenario 3: holds the channel mention, and the deep link when the team id is known", () => {
-    expect(channelLink("C1")).toBe("<#C1>");
+  it("Scenario 3: holds the channel mention and a clickable slack:// deep link when the team id is known", () => {
     const text = channelLink("C1", "T9");
     expect(text).toContain("<#C1>");
-    expect(text).toContain("slack://channel?team=T9&id=C1");
+    expect(text).toContain("<slack://channel?team=T9&id=C1|open your channel>");
+  });
+
+  it("Scenario 3: with no team id it holds the mention and a clickable web redirect", () => {
+    const text = channelLink("C1");
+    expect(text).toContain("<#C1>");
+    expect(text).toContain("<https://slack.com/app_redirect?channel=C1|open your channel>");
   });
 });
 
@@ -252,6 +323,16 @@ describe("channelPost", () => {
       expect(deps.logs[0]).toContain("channel_lost");
     });
   }
+
+  it("a failed post to an old channel id leaves the current active channel active and rethrows", async () => {
+    const deps = makeDeps();
+    await start(deps);
+    deps.logs.length = 0;
+    deps.slack.chat.postMessage = fail("is_archived", true);
+    await expect(channelPost(deps, "U1", { channel: "C-OLD", text: "hi" })).rejects.toThrow("is_archived");
+    expect(getMemberChannel(deps.store, "U1")).toEqual({ id: "C-1", name: "onboarding-copilot-u1", state: "active" });
+    expect(deps.logs).toHaveLength(0);
+  });
 
   it("rethrows any other error and leaves the state alone", async () => {
     const deps = makeDeps();

@@ -17,9 +17,15 @@ export interface EnsureResult {
   teamId?: string;
 }
 
-/** The channel name for a try: attempts 1 to 3 add `-2` to `-4`; attempt 4 is the lowercase user id. */
+/**
+ * The channel name for a try: attempts 1 to 3 add `-2` to `-4`; attempt 4 is the lowercase user id.
+ * With no profile name every name is already built from the user id, so attempt 4 continues the suffixes (`-5`)
+ * and no create call repeats a name that already failed.
+ */
 export function channelNameFor(profileName: string | undefined, userId: string, attempt = 0): string {
-  if (attempt > MAX_RETRIES) return PREFIX + slugOf(userId).slice(0, MAX_LENGTH - PREFIX.length).replace(/-+$/, "");
+  if (attempt > MAX_RETRIES && slugOf(profileName ?? "")) {
+    return PREFIX + slugOf(userId).slice(0, MAX_LENGTH - PREFIX.length).replace(/-+$/, "");
+  }
   const suffix = attempt > 0 ? `-${attempt + 1}` : "";
   const slug = slugOf(profileName ?? "") || slugOf(userId);
   return PREFIX + slug.slice(0, MAX_LENGTH - PREFIX.length - suffix.length).replace(/-+$/, "") + suffix;
@@ -62,7 +68,18 @@ async function invite(deps: Deps, channel: string, memberId: string): Promise<st
   }
 }
 
-export async function ensureMemberChannel(deps: Deps, input: { memberId: string; startedBy: "event" | "command" }): Promise<EnsureResult> {
+const inFlight = new Map<string, Promise<EnsureResult>>();
+
+/** Concurrent calls for one member share one run, so two events cannot create two channels. */
+export function ensureMemberChannel(deps: Deps, input: { memberId: string; startedBy: "event" | "command" }): Promise<EnsureResult> {
+  const running = inFlight.get(input.memberId);
+  if (running) return running;
+  const run = ensureOnce(deps, input).finally(() => inFlight.delete(input.memberId));
+  inFlight.set(input.memberId, run);
+  return run;
+}
+
+async function ensureOnce(deps: Deps, input: { memberId: string; startedBy: "event" | "command" }): Promise<EnsureResult> {
   const { memberId, startedBy } = input;
   const { store } = deps;
   const stored = getMemberChannel(store, memberId);
@@ -71,13 +88,19 @@ export async function ensureMemberChannel(deps: Deps, input: { memberId: string;
 
   if (stored?.id && (stored.state === "member_left" || stored.state === "invite_failed")) {
     const code = await invite(deps, stored.id, memberId);
-    if (code) {
+    if (!code) {
+      setMemberChannel(store, memberId, { id: stored.id, name: stored.name, state: "active" });
+      return { outcome: "reinvited", channelId: stored.id, channelName: stored.name ?? undefined };
+    }
+    if (LOST_CODES.some((lost) => code.includes(lost))) {
+      // The channel is gone: mark it lost and fall through to create a replacement in this call (FR-CH-024).
+      setMemberChannel(store, memberId, { id: stored.id, name: stored.name, state: "lost" });
+      deps.log("channel_lost", { member: memberId, channel: stored.id, error: code });
+    } else {
       setMemberChannel(store, memberId, { id: stored.id, name: stored.name, state: "invite_failed" });
       deps.log("channel_invite_failed", { member: memberId, channel: stored.id, error: code });
       return { outcome: "invite_failed", channelId: stored.id, channelName: stored.name ?? undefined };
     }
-    setMemberChannel(store, memberId, { id: stored.id, name: stored.name, state: "active" });
-    return { outcome: "reinvited", channelId: stored.id, channelName: stored.name ?? undefined };
   }
 
   // No channel, or a lost one: create.
@@ -119,11 +142,13 @@ export function memberChannel(store: Store, memberId: string): { id: string; nam
   return { id: stored.id, name: stored.name, state: stored.state };
 }
 
+/** The channel mention plus a clickable link: the `slack://` deep link when the team id is known, else the web redirect. */
 export function channelLink(channelId: string, teamId?: string): string {
-  return `<#${channelId}>` + (teamId ? ` (slack://channel?team=${teamId}&id=${channelId})` : "");
+  const url = teamId ? `slack://channel?team=${teamId}&id=${channelId}` : `https://slack.com/app_redirect?channel=${channelId}`;
+  return `<#${channelId}> (<${url}|open your channel>)`;
 }
 
-/** Posts to the member's channel. A lost channel sets `channel_state='lost'`, logs once and returns undefined (FR-CH-024). */
+/** Posts to the member's channel. A lost member channel (not any other channel id) sets `channel_state='lost'`, logs once and returns undefined (FR-CH-024). */
 export async function channelPost(
   deps: Deps,
   memberId: string,
@@ -133,7 +158,8 @@ export async function channelPost(
     return await deps.slack.chat.postMessage(args);
   } catch (error) {
     const code = errorCode(error);
-    if (!LOST_CODES.some((lost) => code.includes(lost))) throw error;
+    const isMemberChannel = getMemberChannel(deps.store, memberId)?.id === args.channel;
+    if (!isMemberChannel || !LOST_CODES.some((lost) => code.includes(lost))) throw error;
     deps.store.run("UPDATE member SET channel_state = 'lost' WHERE member_id = ?", memberId);
     deps.log("channel_lost", { member: memberId, channel: args.channel, error: code });
     return undefined;
