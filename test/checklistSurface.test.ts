@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { itemLabel } from "../src/instruction.js";
 import { createRows, getRows, type ItemDef } from "../src/checklist.js";
 import { selectSurface } from "../src/checklistSurface.js";
-import { canvasSurface, makeCanvasSurface } from "../src/checklistSurfaceCanvas.js";
+import { canvasLabel, canvasSurface, makeCanvasSurface } from "../src/checklistSurfaceCanvas.js";
 import { messageSurface } from "../src/checklistSurfaceMessage.js";
 import { makeDeps, slackError } from "./helpers.js";
 
@@ -240,7 +239,7 @@ describe("canvas surface", () => {
     deps.store.get<{ checklist_canvas_id: string | null; canvas_surface: string | null }>("SELECT checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'U1'");
   const degraded = (deps: TestDeps) => deps.logs.filter((l) => l.includes("canvas_degraded"));
   const canvasCalls = (deps: TestDeps) => deps.fake.calls.filter((c) => c.method.includes("canvas"));
-  const label = (deps: TestDeps, id: string) => itemLabel(deps, "technical", deps.items.items.find((i) => i.id === id) as ItemDef);
+  const label = (deps: TestDeps, id: string) => canvasLabel(deps, "technical", deps.items.items.find((i) => i.id === id) as ItemDef);
   const body = (deps: TestDeps) => (deps.fake.canvasBodies["F-1"] ?? "").split("\n");
 
   describe("create", () => {
@@ -252,9 +251,9 @@ describe("canvas surface", () => {
       expect(stored(deps)).toEqual({ checklist_canvas_id: "F-1", canvas_surface: "canvas" });
       const lines = body(deps);
       expect(lines[0]).toBe(`The glossary canvas: ${GLOSSARY}`);
-      expect(lines[1]).toBe("- [ ] 1. Connect Claude to Slack");
+      expect(lines[1]).toBe("- [ ] Step 1: Connect Claude to Slack");
       expect(lines).toHaveLength(8);
-      expect(lines.slice(1).every((l) => /^- \[ \] \d\. /.test(l))).toBe(true);
+      expect(lines.slice(1).every((l) => /^- \[ \] Step \d: /.test(l))).toBe(true);
       const posts = deps.fake.of("chat.postMessage");
       expect(posts).toHaveLength(1);
       expect((posts[0]?.args as { channel: string }).channel).toBe("C-1");
@@ -274,7 +273,7 @@ describe("canvas surface", () => {
       expect(edits).toHaveLength(2);
       expect(edits.at(-1)?.changes[0]).not.toHaveProperty("section_id");
       expect(body(deps)).toHaveLength(8);
-      expect(body(deps)[1]).toBe("- [ ] 1. Connect Claude to Slack");
+      expect(body(deps)[1]).toBe("- [ ] Step 1: Connect Claude to Slack");
       expect(deps.fake.of("chat.postMessage")).toHaveLength(1);
       expect(degraded(deps)).toHaveLength(0);
     });
@@ -387,16 +386,16 @@ describe("canvas surface", () => {
         "canvases.edit",
       ]);
       const lookups = deps.fake.of("canvases.sections.lookup").map((c) => c.args);
-      expect(lookups[0]).toEqual({ canvas_id: "F-1", criteria: { contains_text: "1. Connect Claude to Slack" } });
+      expect(lookups[0]).toEqual({ canvas_id: "F-1", criteria: { contains_text: "Step 1: Connect Claude to Slack" } });
       const edits = deps.fake.of("canvases.edit").map((c) => c.args as { canvas_id: string; changes: Record<string, unknown>[] });
       for (const e of edits) expect(e.changes).toHaveLength(1);
       expect(edits[0]?.changes[0]).toEqual({
         operation: "replace",
         section_id: "temp:F-1:1",
-        document_content: { type: "markdown", markdown: "- [x] 1. Connect Claude to Slack" },
+        document_content: { type: "markdown", markdown: "- [x] Step 1: Connect Claude to Slack" },
       });
       const lines = body(deps);
-      expect(lines.slice(1, 3)).toEqual(["- [x] 1. Connect Claude to Slack", "- [x] 2. Connect Claude to Context Builder"]);
+      expect(lines.slice(1, 3)).toEqual(["- [x] Step 1: Connect Claude to Slack", "- [x] Step 2: Connect Claude to Context Builder"]);
       expect(lines.slice(3).every((l) => l.startsWith("- [ ] "))).toBe(true);
       expect(lines[0]).toBe(`The glossary canvas: ${GLOSSARY}`);
       expect(deps.fake.calls.some((c) => /getContent|files\.info|bookmarks/.test(c.method))).toBe(false);
@@ -426,8 +425,8 @@ describe("canvas surface", () => {
       expect(edits[0]?.changes[0]).not.toHaveProperty("section_id");
       const lines = body(deps);
       expect(lines[0]).toBe(`The glossary canvas: ${GLOSSARY}`);
-      expect(lines.slice(1, 3)).toEqual(["- [x] 1. Connect Claude to Slack", "- [x] 2. Connect Claude to Context Builder"]);
-      expect(lines[3]).toBe("- [ ] 3. Set up a Claude Project");
+      expect(lines.slice(1, 3)).toEqual(["- [x] Step 1: Connect Claude to Slack", "- [x] Step 2: Connect Claude to Context Builder"]);
+      expect(lines[3]).toBe("- [ ] Step 3: Set up a Claude Project");
       expect(degraded(deps)).toHaveLength(0);
     });
 
@@ -441,7 +440,7 @@ describe("canvas surface", () => {
       const edits = deps.fake.of("canvases.edit");
       expect(edits).toHaveLength(2);
       expect(edits[1]?.args).toEqual(edits[0]?.args);
-      expect(body(deps)[1]).toBe("- [x] 1. Connect Claude to Slack");
+      expect(body(deps)[1]).toBe("- [x] Step 1: Connect Claude to Slack");
       expect(degraded(deps)).toHaveLength(0);
     });
 
@@ -464,12 +463,12 @@ describe("canvas surface", () => {
       expect(degraded(deps)).toHaveLength(0);
       expect(deps.logs.filter((l) => l.includes("canvas_locked"))).toHaveLength(1);
       expect(stored(deps)?.canvas_surface).toBe("canvas");
-      expect(body(deps)[1]).toBe("- [ ] 1. Connect Claude to Slack");
+      expect(body(deps)[1]).toBe("- [ ] Step 1: Connect Claude to Slack");
 
       locked = false;
       tickRow(deps, "I2");
       await surface.update(deps, "U1", rows(deps), ["I2"]);
-      expect(body(deps).slice(1, 3)).toEqual(["- [x] 1. Connect Claude to Slack", "- [x] 2. Connect Claude to Context Builder"]);
+      expect(body(deps).slice(1, 3)).toEqual(["- [x] Step 1: Connect Claude to Slack", "- [x] Step 2: Connect Claude to Context Builder"]);
       expect(degraded(deps)).toHaveLength(0);
 
       const before = deps.fake.of("canvases.edit").length;
@@ -588,8 +587,8 @@ describe("canvas surface", () => {
       tickRow(deps, "I1");
       await surface.update(deps, "U1", rows(deps));
       const args = deps.fake.of("canvases.sections.lookup")[0]?.args as { criteria: { contains_text: string } };
-      expect(args.criteria.contains_text).toBe("1. Connect *Claude* (to) [Slack] _now_");
-      expect(body(deps)[1]).toBe("- [x] 1. Connect *Claude* (to) [Slack] _now_");
+      expect(args.criteria.contains_text).toBe("Step 1: Connect *Claude* (to) [Slack] _now_");
+      expect(body(deps)[1]).toBe("- [x] Step 1: Connect *Claude* (to) [Slack] _now_");
     });
 
     it("two ticks racing run one after the other: no call of the second starts before the first finishes", async () => {
@@ -613,7 +612,7 @@ describe("canvas surface", () => {
         "canvases.sections.lookup",
         "canvases.edit",
       ]);
-      expect(body(deps).slice(1, 3)).toEqual(["- [x] 1. Connect Claude to Slack", "- [x] 2. Connect Claude to Context Builder"]);
+      expect(body(deps).slice(1, 3)).toEqual(["- [x] Step 1: Connect Claude to Slack", "- [x] Step 2: Connect Claude to Context Builder"]);
     });
   });
 
@@ -687,7 +686,7 @@ describe("both surface: the pinned message and the canvas together (CHECKLIST_SU
     deps.store.run("UPDATE checklist_item SET status = 'ticked', method = 'observed' WHERE member_id = 'U1' AND item_id = 'I1'");
     await selectSurface(deps, "U1").update(deps, "U1", rows(deps), ["I1"]);
     expect(deps.fake.of("chat.update")).toHaveLength(1);
-    expect(deps.fake.canvasBodies["F-1"]).toContain("- [x] 1. Connect Claude to Slack");
+    expect(deps.fake.canvasBodies["F-1"]).toContain("- [x] Step 1: Connect Claude to Slack");
     await selectSurface(deps, "U1").reset(deps, "U1");
     expect(deps.fake.of("chat.update")).toHaveLength(2);
     expect(deps.fake.canvasBodies["F-1"]).toContain("Checklist reset");
@@ -753,7 +752,7 @@ describe("canvas fallback: no channel canvas on this plan (both mode)", () => {
     await selectSurface(deps, "U1").create(deps, "U1", rows(deps));
     deps.store.run("UPDATE checklist_item SET status = 'ticked', method = 'observed' WHERE member_id = 'U1' AND item_id = 'I1'");
     await selectSurface(deps, "U1").update(deps, "U1", rows(deps), ["I1"]);
-    expect(deps.fake.canvasBodies["F-S1"]).toContain("- [x] 1. Connect Claude to Slack");
+    expect(deps.fake.canvasBodies["F-S1"]).toContain("- [x] Step 1: Connect Claude to Slack");
   });
 
   it("with no workspace link known the fallback is not tried: the canvas degrades and the message stays", async () => {
@@ -777,5 +776,36 @@ describe("canvas fallback: no channel canvas on this plan (both mode)", () => {
     expect(degraded[0]).toContain("needed=canvases:write");
     expect(stored(deps)).toMatchObject({ canvas_surface: "message" });
     expect(deps.fake.of("pins.add")).toHaveLength(1);
+  });
+});
+
+describe("canvas creation retries (canvas_creation_failed from Slack)", () => {
+  const setup = () => {
+    const deps = makeDeps({ glossaryUrl: GLOSSARY, checklistSurface: "both", canvasUrl: (id) => `https://acme.slack.com/docs/T1/${id}` });
+    deps.store.run("INSERT INTO member (member_id, started_by, dm_channel_id, channel_id, role) VALUES ('U1', 'command', 'D-U1', 'C-1', 'technical')");
+    createRows(deps.store, deps.items, "U1", "technical");
+    return deps;
+  };
+  const rows = (deps: ReturnType<typeof makeDeps>) => getRows(deps.store, "U1");
+
+  it("no canvas line starts a nested numbered list: each is `- [ ] Step N: name`", async () => {
+    const deps = setup();
+    await selectSurface(deps, "U1").create(deps, "U1", rows(deps));
+    const lines = (deps.fake.canvasBodies["F-1"] ?? "").split("\n").slice(1);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) expect(line).toMatch(/^- \[ \] Step \d: \S/);
+  });
+
+  it("a refused title is retried once without it, and the canvas is made as a channel canvas", async () => {
+    const deps = setup();
+    const create = deps.slack.conversations.canvases.create;
+    deps.slack.conversations.canvases.create = async (args) => {
+      if (args.title) throw slackError("canvas_creation_failed");
+      return create(args);
+    };
+    await selectSurface(deps, "U1").create(deps, "U1", rows(deps));
+    expect(deps.fake.of("canvases.create")).toHaveLength(0); // no standalone fallback needed
+    expect(deps.logs.some((l) => l.includes("canvas_retry_untitled"))).toBe(true);
+    expect(deps.store.get("SELECT canvas_surface FROM member WHERE member_id = 'U1'")).toEqual({ canvas_surface: "both" });
   });
 });

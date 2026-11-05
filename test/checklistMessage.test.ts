@@ -175,7 +175,7 @@ describe("checklist message", () => {
     expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(4);
     expect(deps.fake.of("canvases.edit")).toHaveLength(4);
     const lookedUp = deps.fake.of("canvases.sections.lookup").map((c) => (c.args as { criteria: { contains_text: string } }).criteria.contains_text);
-    expect(lookedUp.slice(2)).toEqual(["3. Set up a Claude Project", "4. Add a skill to the Project and use it"]);
+    expect(lookedUp.slice(2)).toEqual(["Step 3: Set up a Claude Project", "Step 4: Add a skill to the Project and use it"]);
   });
 
   it("completion sends one message naming the glossary and the help contact, and a duplicate sends none (Scenario 6)", async () => {

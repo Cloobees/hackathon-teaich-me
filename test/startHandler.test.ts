@@ -433,9 +433,9 @@ describe("a lost channel is replaced and the member's progress follows (FR-CH-02
 
     expect(deps.fake.of("conversations.canvases.create").at(-1)?.args).toMatchObject({ channel_id: "C-2" });
     expect(deps.store.get("SELECT checklist_canvas_id, canvas_surface FROM member WHERE member_id = 'U1'")).toEqual({ checklist_canvas_id: "F-2", canvas_surface: "canvas" });
-    expect(deps.fake.canvasBodies["F-2"]).toContain("- [x] 1. Connect Claude to Slack");
-    expect(deps.fake.canvasBodies["F-2"]).toContain("- [x] 2. Connect Claude to Context Builder");
-    expect(deps.fake.canvasBodies["F-2"]).toContain("- [ ] 3. Set up a Claude Project");
+    expect(deps.fake.canvasBodies["F-2"]).toContain("- [x] Step 1: Connect Claude to Slack");
+    expect(deps.fake.canvasBodies["F-2"]).toContain("- [x] Step 2: Connect Claude to Context Builder");
+    expect(deps.fake.canvasBodies["F-2"]).toContain("- [ ] Step 3: Set up a Claude Project");
     expect(deps.logs.filter((l) => l.includes("canvas_degraded"))).toHaveLength(0);
   });
 

@@ -1,10 +1,9 @@
 import { isolated, markChannelLost, safePost } from "./channel.js";
-import { itemsForRole, type ChecklistRow } from "./checklist.js";
+import { itemsForRole, position, type ChecklistRow, type ItemDef } from "./checklist.js";
 import { glossaryLine } from "./checklistMessage.js";
 import type { ChecklistSurface } from "./checklistSurface.js";
 import { messageSurface } from "./checklistSurfaceMessage.js";
 import type { Deps } from "./deps.js";
-import { itemLabel } from "./instruction.js";
 import type { Role } from "./store.js";
 
 const GONE_CODES = ["is_archived", "channel_not_found", "not_in_channel"];
@@ -27,14 +26,31 @@ const target = (deps: Deps, memberId: string) =>
   deps.store.get<Target>("SELECT role, channel_id, checklist_canvas_id, canvas_surface, checklist_ts FROM member WHERE member_id = ?", memberId);
 
 const CANVAS_TITLE = "Onboarding checklist";
+
+/** Runs a create call with the title; a bare `canvas_creation_failed` is tried once more without it, in case the title is what Slack refused. */
+async function titled<T>(deps: Deps, memberId: string, create: (title: string | undefined) => Promise<T>): Promise<T> {
+  try {
+    return await create(CANVAS_TITLE);
+  } catch (error) {
+    if (codeOf(error) !== "canvas_creation_failed") throw error;
+    deps.log("canvas_retry_untitled", { member: memberId, outcome: "canvas_creation_failed", detail: detailOf(error) });
+    return create(undefined);
+  }
+}
 const RESET_TEXT = "Checklist reset. A new one follows when you choose your role.";
 const POINTER_TEXT = "Your onboarding checklist is the canvas in this channel's Canvas tab. I tick items off there as you complete them.";
+
+/**
+ * An item's line in the canvas: "Step 1: Connect Claude to Slack". The message's "1. Connect..." label would read as a
+ * nested numbered list inside the checklist item, which Slack's markdown conversion can refuse (`canvas_creation_failed`).
+ */
+export const canvasLabel = (deps: Deps, role: Role, item: ItemDef): string => `Step ${position(deps.items, role, item.id)}: ${item.name}`;
 
 /** The whole canvas as markdown: the glossary line first, then one task line per item, ticked from the store's rows. */
 function bodyFor(deps: Deps, role: Role, rows: ChecklistRow[]): string {
   const lines = itemsForRole(deps.items, role).map((item) => {
     const ticked = rows.some((r) => r.item_id === item.id && r.status === "ticked");
-    return `- [${ticked ? "x" : " "}] ${itemLabel(deps, role, item)}`;
+    return `- [${ticked ? "x" : " "}] ${canvasLabel(deps, role, item)}`;
   });
   return [glossaryLine(deps), ...lines].join("\n");
 }
@@ -177,12 +193,12 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
           let canvasId: string | undefined;
           ok = (await guarded(deps, memberId, async () => {
             try {
-              canvasId = (await deps.slack.conversations.canvases.create({ channel_id: channel, title: CANVAS_TITLE, document_content: { type: "markdown", markdown } })).canvas_id;
+              canvasId = (await titled(deps, memberId, (title) => deps.slack.conversations.canvases.create({ channel_id: channel, title, document_content: { type: "markdown", markdown } }))).canvas_id;
             } catch (error) {
               // No channel canvas on this plan or channel: make a standalone canvas, share it to the channel and link it there.
               if (!NO_CHANNEL_CANVAS.includes(codeOf(error)) || !deps.canvasUrl) throw error;
               deps.log("canvas_standalone", { member: memberId, outcome: codeOf(error), detail: detailOf(error) });
-              canvasId = (await deps.slack.canvases.create({ title: CANVAS_TITLE, document_content: { type: "markdown", markdown } })).canvas_id;
+              canvasId = (await titled(deps, memberId, (title) => deps.slack.canvases.create({ title, document_content: { type: "markdown", markdown } }))).canvas_id;
               if (!canvasId) throw new Error("no_canvas_id");
               await deps.slack.canvases.access.set({ canvas_id: canvasId, access_level: "read", channel_ids: [channel] });
               standalone = deps.canvasUrl(canvasId);
@@ -229,7 +245,7 @@ export function makeCanvasSurface(options: CanvasSurfaceOptions = {}): Checklist
         const result = await guarded(deps, memberId, async () => {
           for (const [n, item] of todo.entries()) {
             try {
-              const label = itemLabel(deps, role, item);
+              const label = canvasLabel(deps, role, item);
               const found = await deps.slack.canvases.sections.lookup({ canvas_id: canvasId, criteria: { contains_text: label } });
               const sectionId = found.sections?.[0]?.id;
               if (!sectionId) {
