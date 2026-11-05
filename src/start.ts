@@ -61,6 +61,13 @@ async function runStart(deps: Deps, input: StartInput): Promise<StartResult> {
       deps.log("start", { member: memberId, started_by: startedBy, outcome: "replaced" });
       return { outcome: "sent", channelCreated: true };
     }
+    // A member with a role but no checklist for this channel (the replacement's first invite failed, or the first post failed)
+    // gets it drawn again from the store, once; one who has a checklist reference gets nothing extra (FR-CH-004, FR-CH-024).
+    const refs = deps.store.get<{ checklist_ts: string | null; checklist_canvas_id: string | null }>(
+      "SELECT checklist_ts, checklist_canvas_id FROM member WHERE member_id = ?",
+      memberId,
+    );
+    if (!refs?.checklist_ts && !refs?.checklist_canvas_id) await createChecklist(deps, memberId, role);
     // With a role stored the welcome and the role question never go out again, whatever the outcome (FR-CH-004).
     // A member re-entering the channel still gets the one link DM; after a reset cleared the role both posts go out again.
     if (ensured.outcome === "reinvited") await sendLinkDm(deps, memberId, channel, ensured.teamId);

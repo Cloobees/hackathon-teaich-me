@@ -101,7 +101,7 @@ describe("/onboard-ch (Scenarios 3 to 6)", () => {
   it("a repeat command for a member with a role says the channel exists and posts nothing", async () => {
     const deps = makeDeps();
     await handleOnboard(deps, { callerId: "U1", text: "" });
-    deps.store.run("UPDATE member SET role = 'technical' WHERE member_id = 'U1'");
+    deps.store.run("UPDATE member SET role = 'technical', checklist_ts = '100.9' WHERE member_id = 'U1'");
     const calls = deps.fake.calls.length;
     expect(await handleOnboard(deps, { callerId: "U1", text: "" })).toBe("You already have an onboarding channel: <#C-1>.");
     expect(deps.fake.calls).toHaveLength(calls);
@@ -168,7 +168,7 @@ describe("start guards", () => {
   it("a second start leaves the stored role unchanged, returns existing and posts nothing (Scenario 5)", async () => {
     const deps = makeDeps();
     await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
-    deps.store.run("UPDATE member SET role = 'technical' WHERE member_id = 'U1'");
+    deps.store.run("UPDATE member SET role = 'technical', checklist_ts = '100.9' WHERE member_id = 'U1'");
     const calls = deps.fake.calls.length;
     expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("existing");
     expect(row(deps, "U1")?.role).toBe("technical");
@@ -190,7 +190,7 @@ describe("BP-097 follow-up", () => {
   it("a member with a stored role who left and starts again gets no welcome, no role question, one link DM and an active channel (FR-CH-004, FR-CH-005)", async () => {
     const deps = makeDeps();
     await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
-    deps.store.run("UPDATE member SET role = 'technical', channel_state = 'member_left' WHERE member_id = 'U1'");
+    deps.store.run("UPDATE member SET role = 'technical', checklist_ts = '100.9', channel_state = 'member_left' WHERE member_id = 'U1'");
     const channelPosts = posts(deps).length;
     const dms = dmPosts(deps).length;
     await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
@@ -474,6 +474,73 @@ describe("a lost channel is replaced and the member's progress follows (FR-CH-02
     expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("existing");
     expect(allPosts(deps)).toHaveLength(posts);
     expect(deps.fake.of("conversations.create")).toHaveLength(2);
+  });
+
+  it("(a) a replacement whose first invite fails is completed by the next start: checklist with both ticks, next instruction, no role question, one link DM", async () => {
+    const deps = makeDeps();
+    await lostWithTwoTicks(deps);
+    const statuses = itemStatuses(deps, "U1");
+    const dmsBefore = dmPosts(deps).length;
+    deps.fake.failInvite = true;
+
+    expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("invite_failed");
+    expect(row(deps, "U1")).toMatchObject({ channel_id: "C-2", channel_state: "invite_failed", role: "technical" });
+    expect(inChannel(deps, "C-2")).toHaveLength(0);
+    expect(dmPosts(deps)).toHaveLength(dmsBefore);
+
+    deps.fake.failInvite = false;
+    const before = allPosts(deps).length;
+    expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("existing");
+
+    expect(deps.fake.of("conversations.create")).toHaveLength(2);
+    expect(row(deps, "U1")).toMatchObject({ channel_id: "C-2", channel_state: "active" });
+    expect(itemStatuses(deps, "U1")).toEqual(statuses);
+    const fresh = allPosts(deps).slice(before);
+    expect(JSON.stringify(fresh)).not.toContain("role_technical");
+    expect(JSON.stringify(fresh)).not.toContain("Which describes you better");
+    const inNew = inChannel(deps, "C-2");
+    expect(inNew).toHaveLength(2);
+    expect(inNew[0]?.text).toContain("2 of 7");
+    expect(JSON.stringify(inNew[0])).toContain("~2. Connect Claude to Context Builder~");
+    expect(inNew[1]?.text).toContain("*3. Set up a Claude Project*");
+    expect(dmPosts(deps)).toHaveLength(dmsBefore + 1);
+    expect(dmPosts(deps).at(-1)?.text).toContain("<#C-2>");
+    expect(deps.store.get<{ checklist_ts: string | null }>("SELECT checklist_ts FROM member WHERE member_id = 'U1'")?.checklist_ts).not.toBeNull();
+  });
+
+  it("(b) an active channel whose checklist reference is null for a member with a role gets the checklist recreated once", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    await applyTick(deps, "U1", "I1", "observed", "100.5");
+    deps.store.run("UPDATE member SET checklist_ts = NULL WHERE member_id = 'U1'");
+    const before = allPosts(deps).length;
+
+    expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("existing");
+    const fresh = allPosts(deps).slice(before);
+    expect(fresh.filter((p) => p.text.includes("onboarding checklist"))).toHaveLength(1);
+    expect(fresh.find((p) => p.text.includes("onboarding checklist"))?.text).toContain("1 of 7");
+    expect(fresh.at(-1)?.text).toContain("*2. Connect Claude to Context Builder*");
+    expect(JSON.stringify(fresh)).not.toContain("role_technical");
+    expect(dmPosts(deps).filter((p) => p.text.includes("<#C-1>"))).toHaveLength(1);
+
+    const again = allPosts(deps).length;
+    expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("existing");
+    expect(allPosts(deps)).toHaveLength(again);
+  });
+
+  it("(c) a member who already has a checklist reference gets no second checklist, on an active or a re-entered channel", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    const before = allPosts(deps).length;
+    expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("existing");
+    expect(allPosts(deps)).toHaveLength(before);
+
+    setMemberChannel(deps.store, "U1", { id: "C-1", name: "onboarding-copilot-u1", state: "member_left" });
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    const fresh = allPosts(deps).slice(before);
+    expect(fresh.filter((p) => p.text.includes("onboarding checklist"))).toHaveLength(0);
+    expect(fresh.filter((p) => p.channel.startsWith("C-"))).toHaveLength(0);
+    expect(fresh.filter((p) => p.channel.startsWith("D-"))).toHaveLength(1);
   });
 });
 
