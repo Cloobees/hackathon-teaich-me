@@ -101,6 +101,9 @@ await app.start();
 botUserId = (await app.client.auth.test()).user_id;
 claudeAppId = (await findClaudeAppId({ slack: app.client as unknown as SlackClient, log })) ?? config.claudeAppId;
 log("start_up", { socket_mode: true, claude_app_found: Boolean(claudeAppId), dashboard_port: config.dashboardPort });
+// Two settings the variant needs and that fail quietly when blank: say so at start.
+if (!claudeAppId) log("config_warning", { missing: "CLAUDE_APP_ID", effect: "I1 cannot tick from the member's Claude post; the Claude app was not found in users.list either" });
+if (!config.glossaryUrl) log("config_warning", { missing: "GLOSSARY_CANVAS_URL", effect: "the welcome and the checklist show no glossary link or button" });
 
 const dashboard = createDashboardServer(store, items);
 await listenOnLocalhost(dashboard, config.dashboardPort);

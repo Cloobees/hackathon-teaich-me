@@ -325,3 +325,33 @@ describe("report and I1 routes still run through the router", () => {
     expect(state.calls).toBe(0);
   });
 });
+
+describe("diagnostic line for a possible Claude post (visibility fix)", () => {
+  const seen = (deps: D) => deps.logs.filter((l) => l.includes('"message_seen"'));
+
+  it("a Claude post with no Claude app id known ticks nothing and logs why, with no message text", async () => {
+    const deps = await ready();
+    await routeChannelMessage(deps, model().client, msg({ text: "welcome to the channel *Sent using* <@U9OTHER>", app_id: "A1", ts: "700.1" }), {});
+    expect(itemStatuses(deps, "U1").I1).toBe("pending");
+    const line = seen(deps).at(-1) ?? "";
+    expect(line).toContain('"own_channel":true');
+    expect(line).toContain('"has_app_id":true');
+    expect(line).toContain('"claude_id_known":false');
+    expect(line).toContain('"mentions_claude":false');
+    expect(line).not.toContain("welcome to the channel");
+  });
+
+  it("a post that arrives as a bot message (bot_id, no user) is dropped and the log says so", async () => {
+    const deps = await ready();
+    await routeChannelMessage(deps, model().client, msg({ user: undefined, bot_id: "B1", app_id: "A1", text: `hello *Sent using* <@${CLAUDE}>`, ts: "700.2" }), { claudeAppId: CLAUDE });
+    expect(itemStatuses(deps, "U1").I1).toBe("pending");
+    expect(seen(deps).at(-1)).toContain('"has_bot_id":true');
+    expect(seen(deps).at(-1)).toContain('"has_user":false');
+  });
+
+  it("plain chatter in another channel logs nothing", async () => {
+    const deps = await ready();
+    await routeChannelMessage(deps, model().client, msg({ channel: "C-OTHER", user: "U9", text: "hi" }), { claudeAppId: CLAUDE });
+    expect(seen(deps)).toHaveLength(0);
+  });
+});

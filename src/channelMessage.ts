@@ -59,11 +59,32 @@ async function answerIfQuestion(deps: Deps, claude: ClaudeClient, msg: ChannelMs
 }
 
 /**
+ * One diagnostic line for a channel message that could be a Claude post (it carries `app_id` or `bot_id`) or that
+ * comes from a member in their own channel. It says why an I1 tick did or did not happen and holds no message text.
+ */
+function logSeen(deps: Deps, msg: ChannelMsg, opts: RouteOptions): void {
+  if (msg.channel_type === "im") return;
+  const ownChannel = msg.user ? getMemberChannel(deps.store, msg.user)?.id === msg.channel : false;
+  if (!ownChannel && !msg.app_id && !msg.bot_id) return;
+  deps.log("message_seen", {
+    channel: msg.channel,
+    own_channel: ownChannel,
+    has_user: Boolean(msg.user),
+    has_app_id: Boolean(msg.app_id),
+    has_bot_id: Boolean(msg.bot_id),
+    subtype: msg.subtype ?? null,
+    claude_id_known: Boolean(opts.claudeAppId),
+    mentions_claude: Boolean(opts.claudeAppId && msg.text?.includes(`<@${opts.claudeAppId}>`)),
+  });
+}
+
+/**
  * Routes a `message` event. `msg.text` is already marked by `withClaudeMark`. Never throws: a failure is logged.
  * DM: one nudge. Channel: report block, then the I1 mention check, then Q&A behind the filter; anything else is ignored.
  */
 export async function routeChannelMessage(deps: Deps, claude: ClaudeClient, msg: ChannelMsg, opts: RouteOptions = {}): Promise<void> {
   try {
+    logSeen(deps, msg, opts);
     if (msg.bot_id || !msg.user) return;
     // A DM with an attachment arrives as subtype `file_share`; it still counts as DM text and gets the nudge (FR-CH-019).
     const dmFile = msg.channel_type === "im" && msg.subtype === "file_share";

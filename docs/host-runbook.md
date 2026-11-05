@@ -23,6 +23,11 @@ The app replies only while this machine is powered, awake, online and signed in.
 
 The channel variant needs its own Slack app, with its own `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in `.env`. Do not reuse the tokens of the original app. Create the app from `manifest.yml`. Against the original manifest it adds the bot scopes `groups:write` and `canvases:read` and the bot event `member_left_channel`, and its slash command is `/onboard-ch`, so both apps can share one workspace. Reinstall the app after any scope change. The five MANUAL spikes (SP-C1 to SP-C5, evidence in `.claude/evidence/BP-090` to `BP-094`) gate live use: do not run the variant for real members until each has a dated outcome line.
 
+Two settings in the variant's `.env` fail quietly when blank, so copy them from the original app's `.env` (same workspace, same values; this folder's `.env` starts blank):
+
+- `GLOSSARY_CANVAS_URL`: without it the welcome and the checklist show no glossary section or "Open glossary" button.
+- `CLAUDE_APP_ID`: without it, and when the `users.list` lookup does not find the Claude app, step 1 (Claude to Slack) cannot tick from the member's Claude post. The app logs a `config_warning` line at start for each of these, and a `message_seen` line for every post that could be Claude's, saying whether it came from the member's own channel, carried an `app_id` or `bot_id`, and mentioned the Claude app (no message text is logged).
+
 ## Start and restart
 
 Start by hand: `npm start` from `hackathon-teaich-me-channel`. A healthy start logs a `start_up` line with `socket_mode: true` and a `dashboard` line with `http://127.0.0.1:<port>/`.
