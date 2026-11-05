@@ -47,14 +47,12 @@ describe("loadLibrary", () => {
   it("keeps the newlines of a multi-line action, in order, with the fence, and a one-sentence check (FR-AS-012)", () => {
     const i1 = loadLibrary(FIXTURE_LIBRARY).find((f) => f.item === "I1");
     const lines = i1?.action?.split("\n") ?? [];
-    expect(lines).toHaveLength(7);
+    expect(lines).toHaveLength(5);
     expect(lines[0]).toMatch(/^1\. Open Claude/);
     expect(lines[1]).toMatch(/^2\. Give your own Claude/);
     expect(lines[2]).toBe("   ```");
     expect(lines[3]).toContain("{channelName}");
     expect(lines[4]).toBe("   ```");
-    expect(lines[5]).toContain("/invite {botMention}");
-    expect(lines[6]).toMatch(/^4\. /);
     expect(i1?.check).not.toContain("\n");
   });
   it("treats a file with no roles as all", () => {
@@ -118,9 +116,16 @@ describe("checkLibrary item-file shape (FR-AS-012, D12)", () => {
     const dir = validWith("i1.md", (t) => t.replaceAll("{channelName}", "the channel"));
     expect(checkLibrary(dir)).toEqual(["i1.md: item I1 action has no {channelName}"]);
   });
-  it("fails an I1 file with no {botMention}", () => {
-    const dir = validWith("i1.md", (t) => t.replace("{botMention}", "the bot"));
-    expect(checkLibrary(dir)).toEqual(["i1.md: item I1 action has no {botMention}"]);
+  it("fails an I1 file that still holds the old /invite {botMention} step (FR-CH-013)", () => {
+    const dir = validWith("i1.md", (t) => t.replace("  2. Give", "  3. In that channel in Slack, send this message: /invite {botMention}\n  2. Give"));
+    expect(checkLibrary(dir)).toEqual([
+      "i1.md: item I1 action must not hold {botMention}",
+      "i1.md: item I1 action must not hold /invite",
+    ]);
+  });
+  it("fails an I1 file that holds /invite without a {botMention}", () => {
+    const dir = validWith("i1.md", (t) => t.replace("  2. Give", "  3. Send /invite @the-bot\n  2. Give"));
+    expect(checkLibrary(dir)).toEqual(["i1.md: item I1 action must not hold /invite"]);
   });
   it("fails an I2 to I6 file with no {channelName}", () => {
     for (const [file, id] of [["i2.md", "I2"], ["i3.md", "I3"], ["i4.md", "I4"], ["i5.md", "I5"], ["i6.md", "I6"]] as const) {

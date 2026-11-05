@@ -127,7 +127,12 @@ function itemShapeProblems(f: LibraryFile, id: string): string[] {
   const reportLine = /^\s*item:\s*(\S+)\s*$/m.exec(action)?.[1];
   const hasReport = /COPILOT-REPORT v1/.test(action);
   if (id !== "I7" && !has("{channelName}")) problems.push(`${f.file}: item ${id} action has no {channelName}`);
-  if (id === "I1" && !has("{botMention}")) problems.push(`${f.file}: item ${id} action has no {botMention}`);
+  // I1 names the existing channel by id (FR-CH-013): no create-channel step, no /invite step, no bot mention.
+  if (id === "I1") {
+    for (const bad of ["{botMention}", "/invite"]) {
+      if (has(bad)) problems.push(`${f.file}: item ${id} action must not hold ${bad}`);
+    }
+  }
   if (id !== "I1" && id !== "I7" && !(hasReport && reportLine === id)) {
     problems.push(`${f.file}: item ${id} action has no COPILOT-REPORT v1 block with 'item: ${id}'`);
   }

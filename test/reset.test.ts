@@ -20,7 +20,7 @@ async function seed(deps: Deps): Promise<void> {
 }
 
 describe("reset by a non-operator (Scenario 10)", () => {
-  it.each(["reset <@U2|sam>", "reset all"])("`/onboard %s` gets the operator message and changes nothing", async (text) => {
+  it.each(["reset <@U2|sam>", "reset all"])("`/onboard-ch %s` gets the operator message and changes nothing", async (text) => {
     const deps = makeDeps();
     await seed(deps);
     const before = snapshot(deps);
@@ -28,7 +28,7 @@ describe("reset by a non-operator (Scenario 10)", () => {
     expect(snapshot(deps)).toBe(before);
   });
 
-  it("the same refusal comes through /onboard", async () => {
+  it("the same refusal comes through /onboard-ch", async () => {
     const deps = makeDeps();
     await seed(deps);
     const before = snapshot(deps);
@@ -50,7 +50,7 @@ describe("reset by an operator", () => {
     expect(snapshot(deps)).toBe(before);
   });
 
-  it("`/onboard reset @member` clears a ticked member, keeps the DM channel and report channel, and tells nobody else (Scenario 8)", async () => {
+  it("`/onboard-ch reset @member` clears a ticked member, keeps the DM channel and report channel, and tells nobody else (Scenario 8)", async () => {
     const deps = makeDeps();
     await seed(deps);
     deps.store.run("UPDATE member SET completed_at = ? WHERE member_id = 'U2'", deps.now());
@@ -93,7 +93,7 @@ describe("reset by an operator", () => {
     expect(deps.store.get<{ role: string | null }>("SELECT role FROM member WHERE member_id = 'U2'")?.role).toBeNull();
   });
 
-  it("`/onboard reset all` clears every test member and leaves the 20 seeded members alone (Scenario 9)", async () => {
+  it("`/onboard-ch reset all` clears every test member and leaves the 20 seeded members alone (Scenario 9)", async () => {
     const deps = makeDeps();
     await onboard(deps, "U2", "technical");
     await onboard(deps, "U3", "non-technical");
@@ -118,7 +118,7 @@ describe("reset by an operator", () => {
     expect(deps.fake.calls.slice(calls).map((c) => c.method)).toEqual(["chat.update", "chat.update", "chat.update"]);
   });
 
-  it.each(["reset <@U9|nobody>", "reset <@U5>"])("`/onboard %s` (no row, or a seeded row) says there is nothing to reset and changes nothing", async (text) => {
+  it.each(["reset <@U9|nobody>", "reset <@U5>"])("`/onboard-ch %s` (no row, or a seeded row) says there is nothing to reset and changes nothing", async (text) => {
     const deps = makeDeps();
     await seed(deps);
     deps.store.run("INSERT INTO member (member_id, role, seeded) VALUES ('U5', 'technical', 1)");
@@ -131,8 +131,8 @@ describe("reset by an operator", () => {
   });
 });
 
-describe("/onboard routing", () => {
-  it("`/onboard` and `/onboard @member` still start onboarding", async () => {
+describe("/onboard-ch routing", () => {
+  it("`/onboard-ch` and `/onboard-ch @member` still start onboarding", async () => {
     const deps = makeDeps();
     expect(await handleOnboard(deps, { callerId: "U1", text: "" })).toContain("onboarding channel");
     expect(await handleOnboard(deps, { callerId: "UOP1", text: "<@U3|sam>" })).toContain("<@U3>");

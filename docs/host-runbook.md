@@ -19,6 +19,10 @@ The app replies only while this machine is powered, awake, online and signed in.
 3. **`.env`.** `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `OPERATOR_USER_IDS` and `CLAUDE_AUTH` are set. Values stay in `.env`, never here.
 4. **Seed.** `npm run seed` once, so the dashboard shows the seeded cohort.
 
+## Slack app setup for the variant
+
+The channel variant needs its own Slack app, with its own `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` in `.env`. Do not reuse the tokens of the original app. Create the app from `manifest.yml`. Against the original manifest it adds the bot scopes `groups:write` and `canvases:read` and the bot event `member_left_channel`, and its slash command is `/onboard-ch`, so both apps can share one workspace. Reinstall the app after any scope change. The five MANUAL spikes (SP-C1 to SP-C5, evidence in `.claude/evidence/BP-090` to `BP-094`) gate live use: do not run the variant for real members until each has a dated outcome line.
+
 ## Start and restart
 
 Start by hand: `npm start` from `hackathon-teaich-me-channel`. A healthy start logs a `start_up` line with `socket_mode: true` and a `dashboard` line with `http://127.0.0.1:<port>/`.
@@ -48,9 +52,9 @@ A reply (or the no-answer line) means the login works. An error means the login 
 
 Write `.claude/evidence/BP-063/host-run.md` and keep the app log as `.claude/evidence/BP-063/host.log`:
 
-1. With every other team machine off, a test account sends `/onboard` in the sandbox and receives the first message in its DM (Scenario 7).
-2. Kill the app process (Task Manager, end `node.exe`). The task restarts it with no one acting. Send `/onboard` again and note the reply.
-3. Reboot the machine, sign in, and send `/onboard` again.
+1. With every other team machine off, a test account sends `/onboard-ch` in the sandbox. The bot creates a private channel for that member and invites them. The member receives one DM with a link to the channel, and the welcome and the role question are the first messages in the channel (Scenarios 1, 3 and 6). The checklist is a pinned message (`CHECKLIST_SURFACE=message`, the default) or a channel canvas (`CHECKLIST_SURFACE=canvas`). The member's Claude posts its reports in the same channel.
+2. Kill the app process (Task Manager, end `node.exe`). The task restarts it with no one acting. Send `/onboard-ch` again and note the reply (the member already has a channel, so no second channel is created).
+3. Reboot the machine, sign in, and send `/onboard-ch` again.
 4. After the reboot, `curl http://127.0.0.1:<port>/api/metrics` on this machine still shows the seeded count (A-EN-007).
 5. List the times and the account's display name in `host-run.md`. `rg -c '"event":"start"' .claude/evidence/BP-063/host.log` must equal the number of starts listed there (first start, after the kill, after the reboot), and `rg -c '"event":"command"'` the number of test commands.
 6. `npm run check:secrets` exits 0 over `host.log`.

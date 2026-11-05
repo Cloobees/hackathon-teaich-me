@@ -181,16 +181,17 @@ describe("instruction placeholders and the stored channel id (FR-CL-013, FR-CH-0
   const instructionCall = (deps: ReturnType<typeof makeDeps>) => deps.fake.of("chat.postMessage").find((c) => String(c.args.text).includes("Do this"));
   const first = (deps: ReturnType<typeof makeDeps>) => String(instructionCall(deps)?.args.text);
 
-  it("replaces the placeholders in the I1 message with the channel id and keeps the steps and the fenced prompt in order", async () => {
+  it("replaces the placeholder in the I1 message with the channel id, keeps the steps and the fenced prompt in order, and has no create-channel or /invite step (FR-CH-013)", async () => {
     const deps = makeDeps({ botMention: "Copilot Dev" });
     await onboard(deps, "U1", "technical");
 
     const text = first(deps);
     expect(text).not.toContain("{");
-    expect(text).toContain("named C-1. If a channel");
-    expect(text).toContain("/invite Copilot Dev");
-    expect(text).toContain("welcome message to C-1.");
-    const parts = ["1. Open Claude", "2. Give your own Claude", "```", "Using your Slack connector", "```", "3. In that channel", "4. Once the copilot", "*I check:*"];
+    expect(text).toContain("private Slack channel with ID C-1. I am already a member");
+    expect(text).not.toContain("/invite");
+    expect(text).not.toContain("Copilot Dev");
+    expect(text).not.toContain("create a private Slack channel");
+    const parts = ["1. Open Claude", "2. Give your own Claude", "```", "Using your Slack connector", "```", "*I check:*"];
     const at: number[] = [];
     for (const part of parts) at.push(text.indexOf(part, (at.at(-1) ?? -1) + 1));
     expect(at.every((n) => n >= 0)).toBe(true);
@@ -200,17 +201,18 @@ describe("instruction placeholders and the stored channel id (FR-CL-013, FR-CH-0
     expect(actionIds(instructionCall(deps))).toEqual(["attest_I1"]);
   });
 
-  it("uses the default mention when the deps carry none", async () => {
+  it("holds no bot mention or /invite when the deps carry none (FR-CH-013)", async () => {
     const deps = makeDeps();
     await onboard(deps, "U1", "technical");
-    expect(first(deps)).toContain("/invite @onboarding-copilot");
+    expect(first(deps)).not.toContain("/invite");
+    expect(first(deps)).not.toContain("@onboarding-copilot");
   });
 
   it("{channelName} in the I1 message is the member's stored channel id, whatever the profile name is (no I1 exception)", async () => {
     const deps = makeDeps();
     deps.fake.profiles.U1 = { real_name: "José Núñez-Smith" };
     await onboard(deps, "U1", "technical");
-    expect(first(deps)).toContain("named C-1.");
+    expect(first(deps)).toContain("with ID C-1.");
     expect(first(deps)).not.toMatch(/onboarding-copilot-|jose/i);
   });
 
@@ -230,7 +232,7 @@ describe("instruction placeholders and the stored channel id (FR-CL-013, FR-CH-0
     await onboard(deps, "U1", "technical");
     await sendInstruction(deps, "U1", "C-ELSEWHERE", "technical");
     const text = String(deps.fake.of("chat.postMessage").at(-1)?.args.text);
-    expect(text).toContain("named C-1.");
+    expect(text).toContain("with ID C-1.");
     expect(text).not.toContain("C-ELSEWHERE");
   });
 
@@ -239,8 +241,8 @@ describe("instruction placeholders and the stored channel id (FR-CL-013, FR-CH-0
     await onboard(deps, "U1", "technical");
     await onboard(deps, "U2", "technical");
     const texts = instructions(deps).map((c) => String(c.args.text));
-    expect(texts[0]).toContain("named C-1.");
-    expect(texts[1]).toContain("named C-2.");
+    expect(texts[0]).toContain("with ID C-1.");
+    expect(texts[1]).toContain("with ID C-2.");
     resetMember(deps.store, "U1");
     expect(deps.store.get("SELECT channel_id FROM member WHERE member_id = 'U1'")).toEqual({ channel_id: "C-1" });
   });
@@ -414,7 +416,8 @@ describe("channel reference in the real library (FR-CH-013)", () => {
     for (const i of [item("I3", "Set up a Claude Project", 3), item("I1", "Connect Claude to Slack", 1)]) {
       const text = instructionText(deps, i, "technical", "C0BOUND01");
       expect(text).toContain("C0BOUND01");
-      expect(text).not.toContain("channel ID");
+      // The I1 prompt itself says "Use the channel ID, not a name search" (FR-CH-013), so the suffix check looks only right after the id.
+      expect(text).not.toMatch(/C0BOUND01[\s,(]*channel ID/i);
       expect(text).not.toContain("{channelName}");
     }
   });
