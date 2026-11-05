@@ -1,4 +1,5 @@
-import { createRows, getRows, itemsForRole, nextPending, tick, type ChecklistRow, type ItemDef, type TickResult } from "./checklist.js";
+import { channelLink } from "./channel.js";
+import { createRows, getRows, nextPending, tick, type ChecklistRow, type ItemDef, type TickResult } from "./checklist.js";
 import { selectSurface } from "./checklistSurface.js";
 import type { Deps } from "./deps.js";
 import { glossaryBlock } from "./glossary.js";
@@ -33,21 +34,24 @@ export function renderChecklist(deps: Deps, role: Role, items: ItemDef[], rows: 
   return { text: `Your onboarding checklist: ${done} of ${items.length} done`, blocks };
 }
 
-/** The Home tab publish; BP-102 rewrites the Home tab. */
-const publishHome = (deps: Deps, memberId: string, blocks: Block[]) =>
-  deps.slack.views.publish({ user_id: memberId, view: { type: "home", blocks } });
-
-/** The Home tab: the member's checklist, or a pointer to `/onboard` for someone who has not started. */
+/**
+ * The Home tab (FR-CH-020, DD-CH-009): one view with a link to the member's channel, or a pointer to `/onboard-ch`
+ * for a member with no channel. It holds no checklist. A failing publish is logged and does not throw.
+ */
 export async function handleHomeOpened(deps: Deps, memberId: string): Promise<void> {
-  const member = deps.store.get<{ role: Role | null }>("SELECT role FROM member WHERE member_id = ?", memberId);
-  const blocks: Block[] = member?.role
-    ? renderChecklist(deps, member.role, itemsForRole(deps.items, member.role), getRows(deps.store, memberId)).blocks
-    : [
-        { type: "header", text: { type: "plain_text", text: "Onboarding Copilot" } },
-        { type: "section", text: { type: "mrkdwn", text: "You have not started yet. Type `/onboard` in the *Messages* tab." } },
-        ...(deps.glossaryUrl ? [glossaryBlock(deps.glossaryUrl)] : []),
-      ];
-  await publishHome(deps, memberId, blocks);
+  const member = deps.store.get<{ channel_id: string | null }>("SELECT channel_id FROM member WHERE member_id = ?", memberId);
+  const text = member?.channel_id
+    ? `Your onboarding channel: ${channelLink(member.channel_id)}. Open it to continue.`
+    : "Type `/onboard-ch` to start your onboarding.";
+  const blocks: Block[] = [
+    { type: "header", text: { type: "plain_text", text: "Onboarding Copilot" } },
+    { type: "section", text: { type: "mrkdwn", text } },
+  ];
+  try {
+    await deps.slack.views.publish({ user_id: memberId, view: { type: "home", blocks } });
+  } catch (error) {
+    deps.log("home_publish_failed", { member: memberId, error: (error as Error).message });
+  }
 }
 
 /** Inserts the rows for the role, has the selected surface draw the checklist, then sends the first instruction in the member's channel. */

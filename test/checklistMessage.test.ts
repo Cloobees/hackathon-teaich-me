@@ -209,10 +209,11 @@ describe("checklist message", () => {
   });
 });
 
-describe("Home tab", () => {
-  it("shows the checklist with the glossary button for a member who has started", async () => {
+describe("Home tab (BP-102)", () => {
+  it("shows a link to the member's channel and no checklist for a member who has started", async () => {
     const deps = makeDeps({ glossaryUrl: "https://example.slack.com/canvas/F1" });
     await onboard(deps, "U1", "technical");
+    const channel = deps.store.get<{ channel_id: string }>("SELECT channel_id FROM member WHERE member_id = ?", "U1")!.channel_id;
     const before = deps.fake.of("views.publish").length;
     await handleHomeOpened(deps, "U1");
 
@@ -220,15 +221,16 @@ describe("Home tab", () => {
     expect(published).toHaveLength(before + 1);
     const args = published.at(-1)?.args as unknown as { user_id: string; view: { type: string; blocks: unknown[] } };
     expect(args).toMatchObject({ user_id: "U1", view: { type: "home" } });
-    expect(text(args.view.blocks)).toContain("Your onboarding checklist");
-    expect(text(args.view.blocks)).toContain("open_glossary");
+    expect(text(args.view.blocks)).toContain(`<#${channel}>`);
+    expect(text(args.view.blocks)).not.toContain("Your onboarding checklist");
+    expect(text(args.view.blocks)).not.toContain("open_glossary");
   });
 
-  it("points a member who has not started to /onboard", async () => {
+  it("points a member with no channel to /onboard-ch", async () => {
     const deps = makeDeps();
     await handleHomeOpened(deps, "U9");
     const blocks = (deps.fake.of("views.publish").at(-1)?.args as unknown as { view: { blocks: unknown[] } }).view.blocks;
-    expect(text(blocks)).toContain("/onboard");
+    expect(text(blocks)).toContain("/onboard-ch");
     expect(text(blocks)).not.toContain("Your onboarding checklist");
   });
 });
