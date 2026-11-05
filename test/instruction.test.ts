@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resetMember } from "../src/checklist.js";
 import { applyTick } from "../src/checklistMessage.js";
 import { instructionText, sendInstruction } from "../src/instruction.js";
+import { handleRole, startOnboarding } from "../src/start.js";
 import { getReportChannel } from "../src/store.js";
 import { loadLibrary } from "../src/library.js";
 import type { Role } from "../src/store.js";
@@ -46,6 +47,14 @@ describe("instruction message", () => {
     expect(body(first)).toContain("1. Connect Claude to Slack");
     expect(body(first)).toContain("Open Claude, go to Settings");
     expect(body(first)).not.toContain("Add the Context Builder connector");
+    expect(first?.args.channel).toBe("C-1");
+  });
+
+  it("sendInstruction posts to the channel it is given (FR-CH-011)", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    await sendInstruction(deps, "U1", "C-ELSEWHERE", "technical");
+    expect(deps.fake.of("chat.postMessage").at(-1)?.args.channel).toBe("C-ELSEWHERE");
   });
 
   it("a tick makes one chat.update and one new message naming the ticked item and giving the next instruction (Scenario 11)", async () => {
@@ -207,14 +216,16 @@ describe("instruction placeholders and channel name (FR-CL-013, FR-VF-004, FR-VF
     expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-ana-d");
   });
 
-  it("reuses the stored name at I2 and on a re-send, and looks the profile up once", async () => {
+  it("reuses the stored name at I2 and on a re-send, and looks the profile up once for the instruction", async () => {
     const deps = makeDeps();
     deps.fake.profiles.U1 = { real_name: "Ana Díaz" };
+    // The channel start has its own lookup for the channel name; the count starts at the role click.
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
     const lookups = vi.spyOn(deps.slack.users, "info");
-    await onboard(deps, "U1", "technical");
+    await handleRole(deps, { memberId: "U1", role: "technical", channel: "C-1", messageTs: "100.001" });
     deps.fake.profiles.U1 = { real_name: "Someone Else" };
     await applyTick(deps, "U1", "I1", "self-attested", null);
-    await sendInstruction(deps, "U1", "D-U1", "technical");
+    await sendInstruction(deps, "U1", "C-1", "technical");
 
     expect(lookups).toHaveBeenCalledTimes(1);
     expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-ana-diaz");
@@ -416,6 +427,7 @@ describe("a failed profile lookup does not fix the channel name for good (FR-VF-
   it("the first users.info call fails and the second succeeds: the profile-based name is stored", async () => {
     const deps = makeDeps();
     deps.fake.profiles.U1 = { real_name: "Ana Díaz" };
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
     const real = deps.slack.users.info;
     let calls = 0;
     deps.slack.users.info = async (args) => {
@@ -423,7 +435,7 @@ describe("a failed profile lookup does not fix the channel name for good (FR-VF-
       if (calls === 1) throw new Error("ratelimited");
       return real(args);
     };
-    await onboard(deps, "U1", "technical");
+    await handleRole(deps, { memberId: "U1", role: "technical", channel: "C-1", messageTs: "100.001" });
 
     expect(calls).toBe(2);
     expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-ana-diaz");
@@ -432,12 +444,13 @@ describe("a failed profile lookup does not fix the channel name for good (FR-VF-
 
   it("both calls fail: the user-id name is stored and the failure is logged", async () => {
     const deps = makeDeps();
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
     let calls = 0;
     deps.slack.users.info = async () => {
       calls += 1;
       throw new Error("ratelimited");
     };
-    await onboard(deps, "U1", "technical");
+    await handleRole(deps, { memberId: "U1", role: "technical", channel: "C-1", messageTs: "100.001" });
 
     expect(calls).toBe(2);
     expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-u1");

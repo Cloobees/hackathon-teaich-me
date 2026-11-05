@@ -52,46 +52,46 @@ export async function handleHomeOpened(deps: Deps, memberId: string): Promise<vo
 /** Inserts the rows for the role, posts the one checklist message, stores its timestamp and pins it; a refused pin falls back to the Home tab. */
 export async function createChecklist(deps: Deps, memberId: string, role: Role): Promise<void> {
   const items = createRows(deps.store, deps.items, memberId, role);
-  const member = deps.store.get<{ dm_channel_id: string | null }>("SELECT dm_channel_id FROM member WHERE member_id = ?", memberId);
-  if (!member?.dm_channel_id) {
-    deps.log("checklist_no_dm", { member: memberId, outcome: "skipped" });
+  const member = deps.store.get<{ channel_id: string | null }>("SELECT channel_id FROM member WHERE member_id = ?", memberId);
+  if (!member?.channel_id) {
+    deps.log("checklist_no_channel", { member: memberId, outcome: "skipped" });
     return;
   }
   const { text, blocks } = renderChecklist(deps, role, items, getRows(deps.store, memberId));
-  const posted = await deps.slack.chat.postMessage({ channel: member.dm_channel_id, text, blocks });
+  const posted = await deps.slack.chat.postMessage({ channel: member.channel_id, text, blocks });
   if (posted.ts) {
     deps.store.run("UPDATE member SET checklist_ts = ? WHERE member_id = ?", posted.ts, memberId);
     try {
-      await deps.slack.pins.add({ channel: member.dm_channel_id, timestamp: posted.ts });
+      await deps.slack.pins.add({ channel: member.channel_id, timestamp: posted.ts });
     } catch (error) {
       deps.store.run("UPDATE member SET pin_refused = 1 WHERE member_id = ?", memberId);
       deps.log("checklist_pin_refused", { member: memberId, outcome: error instanceof Error ? error.message : "refused" });
       await publishHome(deps, memberId, blocks);
     }
   }
-  await sendInstruction(deps, memberId, member.dm_channel_id, role);
+  await sendInstruction(deps, memberId, member.channel_id, role);
   deps.log("checklist_created", { member: memberId, role, outcome: "posted" });
 }
 
 /**
  * Every route ticks through here: tick, then edit the checklist message in place (text and blocks together),
- * DM a refusal, then send the completion message once or the next instruction.
+ * post a refusal in the channel, then send the completion message once or the next instruction.
  */
 export async function applyTick(deps: Deps, memberId: string, itemId: string, method: Method, evidenceRef: string | null): Promise<TickResult> {
   const result = tick(deps.store, deps.items, memberId, itemId, method, evidenceRef, deps.now);
-  const member = deps.store.get<{ role: Role | null; dm_channel_id: string | null; checklist_ts: string | null; pin_refused: number | null }>(
-    "SELECT role, dm_channel_id, checklist_ts, pin_refused FROM member WHERE member_id = ?",
+  const member = deps.store.get<{ role: Role | null; channel_id: string | null; checklist_ts: string | null; pin_refused: number | null }>(
+    "SELECT role, channel_id, checklist_ts, pin_refused FROM member WHERE member_id = ?",
     memberId,
   );
   deps.log("tick", { member: memberId, item: itemId, method, outcome: result.status });
-  if (!member?.role || !member.dm_channel_id) return result;
+  if (!member?.role || !member.channel_id) return result;
 
   if (result.status === "refused") {
     const needed = deps.items.items.find((i) => i.id === result.needs);
     const attempted = deps.items.items.find((i) => i.id === itemId);
     const label = (item: ItemDef | undefined, fallback: string) => (item ? itemLabel(deps, member.role as Role, item) : fallback);
     await deps.slack.chat.postMessage({
-      channel: member.dm_channel_id,
+      channel: member.channel_id,
       text: `Do *${label(needed, "the earlier step")}* first, then come back to *${label(attempted, "this step")}*.`,
     });
   }
@@ -99,16 +99,16 @@ export async function applyTick(deps: Deps, memberId: string, itemId: string, me
     if (member.checklist_ts) {
       const items = deps.items.items.filter((i) => i.roles === "all" || i.roles === member.role);
       const { text, blocks } = renderChecklist(deps, member.role, items, getRows(deps.store, memberId));
-      await deps.slack.chat.update({ channel: member.dm_channel_id, ts: member.checklist_ts, text, blocks });
+      await deps.slack.chat.update({ channel: member.channel_id, ts: member.checklist_ts, text, blocks });
       if (member.pin_refused) await publishHome(deps, memberId, blocks);
     }
     if (result.completed) {
       await deps.slack.chat.postMessage({
-        channel: member.dm_channel_id,
+        channel: member.channel_id,
         text: `You have finished onboarding. ${glossaryLine(deps)} ${deps.items.help}`.trim(),
       });
     } else {
-      await sendInstruction(deps, memberId, member.dm_channel_id, member.role, result.ticked);
+      await sendInstruction(deps, memberId, member.channel_id, member.role, result.ticked);
     }
   }
   return result;

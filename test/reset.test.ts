@@ -79,7 +79,7 @@ describe("reset by an operator", () => {
     await handleOnboard(deps, { callerId: "U2", text: "" });
     expect(deps.fake.of("chat.postMessage")).toHaveLength(posts + 2);
     const message = deps.fake.last("chat.postMessage");
-    expect(message.channel).toBe("D-U2");
+    expect(message.channel).toBe(deps.store.get<{ channel_id: string }>("SELECT channel_id FROM member WHERE member_id = 'U2'")?.channel_id);
     expect(JSON.stringify(message.blocks)).toContain("role_technical");
     expect(JSON.stringify(message.blocks)).toContain("role_non-technical");
     expect(deps.store.get<{ role: string | null }>("SELECT role FROM member WHERE member_id = 'U2'")?.role).toBeNull();
@@ -125,7 +125,7 @@ describe("reset by an operator", () => {
 describe("/onboard routing", () => {
   it("`/onboard` and `/onboard @member` still start onboarding", async () => {
     const deps = makeDeps();
-    expect(await handleOnboard(deps, { callerId: "U1", text: "" })).toContain("DM");
+    expect(await handleOnboard(deps, { callerId: "U1", text: "" })).toContain("onboarding channel");
     expect(await handleOnboard(deps, { callerId: "UOP1", text: "<@U3|sam>" })).toContain("<@U3>");
     expect(deps.store.get("SELECT 1 FROM member WHERE member_id = 'U3'")).toBeTruthy();
   });

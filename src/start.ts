@@ -1,3 +1,4 @@
+import { channelLink, ensureMemberChannel, memberChannel } from "./channel.js";
 import { createChecklist } from "./checklistMessage.js";
 import type { Deps } from "./deps.js";
 import { glossaryBlock } from "./glossary.js";
@@ -6,7 +7,7 @@ import { handleReset } from "./reset.js";
 import type { Block } from "./slack.js";
 import type { Role } from "./store.js";
 
-export type StartOutcome = "sent" | "bot" | "duplicate" | "dm_failed";
+export type StartOutcome = "sent" | "bot" | "duplicate" | "channel_failed" | "invite_failed" | "existing";
 
 export interface StartInput {
   memberId: string;
@@ -16,7 +17,10 @@ export interface StartInput {
   eventId?: string;
 }
 
-/** The one start handler for every route (DD-ST-001): bot and duplicate guards, open the DM, post the role question. */
+/**
+ * The one start handler for every route (DD-ST-001): bot and duplicate guards, create or reuse the member's channel,
+ * post the welcome and the role question in it (FR-CH-003), then send the one link DM (FR-CH-005).
+ */
 export async function startOnboarding(deps: Deps, input: StartInput): Promise<StartOutcome> {
   const { memberId, startedBy } = input;
   if (input.isBot) return "bot";
@@ -25,17 +29,22 @@ export async function startOnboarding(deps: Deps, input: StartInput): Promise<St
     if (!fresh) return "duplicate";
   }
 
-  let dm: string | undefined;
-  try {
-    dm = (await deps.slack.conversations.open({ users: memberId })).channel?.id;
-    if (!dm) throw new Error("conversations.open returned no channel");
-  } catch (error) {
-    deps.log("start_failed", { member: memberId, error: (error as Error).message, outcome: "dm_failed" });
-    return "dm_failed";
+  const ensured = await ensureMemberChannel(deps, { memberId, startedBy });
+  if (ensured.outcome === "create_failed") {
+    deps.log("start_failed", { member: memberId, outcome: "channel_failed" });
+    return "channel_failed";
   }
+  if (ensured.outcome === "invite_failed") {
+    deps.log("start_failed", { member: memberId, outcome: "invite_failed" });
+    return "invite_failed";
+  }
+  const channel = ensured.channelId as string;
 
-  // Insert-if-absent: a second start never changes a stored role or the ticks (DD-ST-002).
-  deps.store.run("INSERT OR IGNORE INTO member (member_id, started_by, dm_channel_id) VALUES (?, ?, ?)", memberId, startedBy, dm);
+  // A repeat start with a stored role posts nothing; after a reset cleared the role the welcome and question go out again (FR-CH-004).
+  if (ensured.outcome === "existing" && deps.store.get<{ role: Role | null }>("SELECT role FROM member WHERE member_id = ?", memberId)?.role) {
+    deps.log("start", { member: memberId, started_by: startedBy, outcome: "existing" });
+    return "existing";
+  }
 
   const defs = roleDefinitions(deps.libraryDir);
   // The welcome is its own message with no button, posted before the role message (FR-ST-008, DD-ST-010).
@@ -47,18 +56,16 @@ export async function startOnboarding(deps: Deps, input: StartInput): Promise<St
     ...(body ? [{ type: "section", text: { type: "mrkdwn", text: body } }] : []),
     ...(deps.glossaryUrl ? [glossaryBlock(deps.glossaryUrl)] : []),
   ];
-  let firstTs: string | undefined;
   if (welcome) {
-    const posted = await deps.slack.chat.postMessage({
-      channel: dm,
+    await deps.slack.chat.postMessage({
+      channel,
       text: welcome,
       blocks: welcomeBlocks,
     });
-    firstTs = posted.ts;
   }
   const question = `Which describes you better?\n• ${defs.technical}\n• ${defs.nonTechnical}`;
-  const role = await deps.slack.chat.postMessage({
-    channel: dm,
+  await deps.slack.chat.postMessage({
+    channel,
     text: question,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: question } },
@@ -71,36 +78,56 @@ export async function startOnboarding(deps: Deps, input: StartInput): Promise<St
       },
     ],
   });
-  firstTs ??= role.ts;
-  if (firstTs) deps.store.run("UPDATE member SET first_message_ts = ? WHERE member_id = ?", firstTs, memberId);
+
+  if (ensured.outcome === "created" || ensured.outcome === "reinvited") await sendLinkDm(deps, memberId, channel, ensured.teamId);
   deps.log("start", { member: memberId, started_by: startedBy, outcome: "sent" });
   return "sent";
 }
 
+/** The one DM of the start flow: a link to the channel. A failure is logged and changes nothing else (FR-CH-005, FR-CH-026). */
+async function sendLinkDm(deps: Deps, memberId: string, channel: string, teamId?: string): Promise<void> {
+  try {
+    const dm = (await deps.slack.conversations.open({ users: memberId })).channel?.id;
+    if (!dm) throw new Error("conversations.open returned no channel");
+    deps.store.run("UPDATE member SET dm_channel_id = ? WHERE member_id = ?", dm, memberId);
+    await deps.slack.chat.postMessage({ channel: dm, text: `Your onboarding channel is ready: ${channelLink(channel, teamId)}. Open it to start.` });
+  } catch (error) {
+    deps.log("link_dm_failed", { member: memberId, error: (error as Error).message });
+  }
+}
+
 export const MENTION = /<@([UW][A-Z0-9]+)(?:\|[^>]*)?>/;
 
-export const OPERATOR_ONLY = "The `/onboard @member` form is for operators. Run `/onboard` on its own to start your own checklist.";
+export const OPERATOR_ONLY = "The `/onboard-ch @member` form is for operators. Run `/onboard-ch` on its own to start your own checklist.";
 export const RESET_OPERATOR_ONLY = "Reset is for operators. Ask an operator to run it for you.";
 
-/** `/onboard` and `/onboard @member`. Returns the private reply for the caller. */
+/** `/onboard-ch` and `/onboard-ch @member`. Returns the private reply for the caller. */
 export async function handleOnboard(deps: Deps, input: { callerId: string; text: string; triggerId?: string }): Promise<string> {
   if (input.text.trim().split(/\s+/)[0] === "reset") return handleReset(deps, input);
   const mention = MENTION.exec(input.text)?.[1];
   const target = mention ?? input.callerId;
-  if (input.text.trim() && !mention) return "Usage: `/onboard` or `/onboard @member` (operators only).";
+  if (input.text.trim() && !mention) return "Usage: `/onboard-ch` or `/onboard-ch @member` (operators only).";
   if (target !== input.callerId && !deps.operators.includes(input.callerId)) {
     deps.log("onboard_refused", { member: input.callerId, outcome: "not_operator" });
     return OPERATOR_ONLY;
   }
   const outcome = await startOnboarding(deps, { memberId: target, startedBy: "command", eventId: input.triggerId });
-  if (outcome === "dm_failed") return "I could not open a DM with that member.";
-  return target === input.callerId ? "I have sent you a DM to start." : `I have sent <@${target}> a DM to start.`;
+  if (outcome === "channel_failed") return "I could not create the onboarding channel. An operator can check the app log.";
+  if (outcome === "invite_failed") return "I created the channel but could not invite the member.";
+  const channel = memberChannel(deps.store, target)?.id;
+  if (outcome === "existing") return `You already have an onboarding channel: <#${channel}>.`;
+  return target === input.callerId ? `I have created your onboarding channel: <#${channel}>. Open it to start.` : `I have created <@${target}>'s onboarding channel.`;
 }
 
 /** A role button click. The first click stores the role and creates the checklist; later clicks change nothing. */
 export async function handleRole(deps: Deps, input: { memberId: string; role: Role; channel: string; messageTs: string }): Promise<void> {
   const { memberId, role, channel, messageTs } = input;
-  deps.store.run("INSERT OR IGNORE INTO member (member_id, started_by, dm_channel_id) VALUES (?, 'command', ?)", memberId, channel);
+  // Only a click in the member's own channel counts; the row exists from the start (FR-CH-012).
+  const owned = deps.store.get<{ channel_id: string | null }>("SELECT channel_id FROM member WHERE member_id = ?", memberId)?.channel_id;
+  if (!owned || owned !== channel) {
+    deps.log("role_ignored", { member: memberId, channel, outcome: "not_member_channel" });
+    return;
+  }
   const stored = deps.store.run("UPDATE member SET role = ?, role_chosen_at = ? WHERE member_id = ? AND role IS NULL", role, deps.now(), memberId) > 0;
   const current = deps.store.get<{ role: Role }>("SELECT role FROM member WHERE member_id = ?", memberId)?.role ?? role;
 

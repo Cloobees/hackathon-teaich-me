@@ -34,12 +34,12 @@ const row = (deps: D, item: string) =>
 describe("channel report listener (BP-075)", () => {
   it("a valid I2 block by the member in the bound channel ticks I2 validated with the message ts and posts nothing in the channel (Scenario 2)", async () => {
     const deps = await ready();
-    const dmPosts = deps.fake.of("chat.postMessage").filter((c) => c.args.channel === "D-U1").length;
+    const dmPosts = deps.fake.of("chat.postMessage").filter((c) => c.args.channel === "C-1").length;
     await report(deps, i2Block(), "1700000000.000100");
     expect(row(deps, "I2")).toMatchObject({ status: "ticked", method: "validated", evidence_ref: "1700000000.000100" });
     expect(deps.fake.of("chat.postMessage").filter((c) => c.args.channel === BOUND)).toHaveLength(0);
-    // The only DM is the next instruction from the tick (FR-CL-011), not a failure message.
-    expect(deps.fake.of("chat.postMessage").filter((c) => c.args.channel === "D-U1")).toHaveLength(dmPosts + 1);
+    // The only post in the member channel is the next instruction from the tick (FR-CL-011), not a failure message.
+    expect(deps.fake.of("chat.postMessage").filter((c) => c.args.channel === "C-1")).toHaveLength(dmPosts + 1);
     expect(deps.fake.last("chat.postMessage").text).not.toMatch(/did not|already used|another member/);
   });
 

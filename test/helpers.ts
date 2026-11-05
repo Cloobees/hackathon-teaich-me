@@ -14,6 +14,9 @@ export interface Call {
   args: Record<string, unknown>;
 }
 
+/** An error shaped like a Slack platform error: the code is `data.error`, as the code under test reads it. */
+export const slackError = (code: string): Error => Object.assign(new Error(code), { data: { error: code } });
+
 /** A Slack client that records every call and fails nothing unless told to. */
 export class FakeSlack {
   calls: Call[] = [];
@@ -30,6 +33,8 @@ export class FakeSlack {
   failCreate = false;
   failInvite = false;
   failCanvas = false;
+  /** `context_team_id` returned by conversations.create; unset by default. */
+  teamId: string | undefined;
   /** Channel names that make conversations.create throw `name_taken` once each. */
   nameTaken: string[] = [];
   /** Channels made by conversations.create, in order. */
@@ -44,37 +49,37 @@ export class FakeSlack {
     conversations: {
       open: async (args) => {
         this.calls.push({ method: "conversations.open", args });
-        if (this.failOpen) throw new Error("cannot_dm_bot");
+        if (this.failOpen) throw slackError("cannot_dm_bot");
         return { channel: { id: `D-${args.users}` } };
       },
       info: async (args) => {
         this.calls.push({ method: "conversations.info", args });
         const channel = this.channels[args.channel];
-        if (!channel) throw new Error("channel_not_found");
+        if (!channel) throw slackError("channel_not_found");
         return { channel: { id: args.channel, name: channel.name, is_private: channel.is_private, is_archived: channel.is_archived } };
       },
       create: async (args) => {
         this.calls.push({ method: "conversations.create", args });
-        if (this.failCreate) throw new Error("restricted_action");
+        if (this.failCreate) throw slackError("restricted_action");
         const taken = this.nameTaken.indexOf(args.name);
         if (taken >= 0) {
           this.nameTaken.splice(taken, 1);
-          throw new Error("name_taken");
+          throw slackError("name_taken");
         }
-        const channel = { id: `C-${++this.channelSeq}`, name: args.name };
+        const channel = { id: `C-${++this.channelSeq}`, name: args.name, ...(this.teamId ? { context_team_id: this.teamId } : {}) };
         this.created.push(channel);
         return { channel };
       },
       invite: async (args) => {
         this.calls.push({ method: "conversations.invite", args });
-        if (this.failInvite) throw new Error("user_is_restricted");
+        if (this.failInvite) throw slackError("user_is_restricted");
         return {};
       },
       canvases: {
         create: async (args) => {
           this.calls.push({ method: "conversations.canvases.create", args });
-          if (this.failCanvas) throw new Error("canvas_disabled_for_team");
-          if (this.canvases[args.channel_id]) throw new Error("channel_canvas_already_exists");
+          if (this.failCanvas) throw slackError("canvas_disabled_for_team");
+          if (this.canvases[args.channel_id]) throw slackError("channel_canvas_already_exists");
           const canvasId = `F-${++this.canvasSeq}`;
           this.canvases[args.channel_id] = canvasId;
           return { canvas_id: canvasId };
@@ -95,20 +100,20 @@ export class FakeSlack {
       sections: {
         lookup: async (args) => {
           this.calls.push({ method: "canvases.sections.lookup", args });
-          if (this.failCanvas) throw new Error("canvas_disabled_for_team");
+          if (this.failCanvas) throw slackError("canvas_disabled_for_team");
           return { sections: [{ id: "temp:C:1" }] };
         },
       },
       edit: async (args) => {
         this.calls.push({ method: "canvases.edit", args });
-        if (this.failCanvas) throw new Error("canvas_disabled_for_team");
+        if (this.failCanvas) throw slackError("canvas_disabled_for_team");
         return {};
       },
     },
     pins: {
       add: async (args) => {
         this.calls.push({ method: "pins.add", args });
-        if (this.failPin) throw new Error("channel_not_found");
+        if (this.failPin) throw slackError("channel_not_found");
         return {};
       },
     },
@@ -121,7 +126,7 @@ export class FakeSlack {
     files: {
       uploadV2: async (args) => {
         this.calls.push({ method: "files.uploadV2", args });
-        if (this.failUpload) throw new Error("upload_failed");
+        if (this.failUpload) throw slackError("upload_failed");
         return {};
       },
     },
@@ -136,7 +141,7 @@ export class FakeSlack {
         };
       },
       list: async () => {
-        if (this.failList) throw new Error("ratelimited");
+        if (this.failList) throw slackError("ratelimited");
         return { members: this.members };
       },
     },
@@ -176,10 +181,11 @@ export function makeDeps(overrides: Partial<Deps> = {}): Deps & { fake: FakeSlac
   };
 }
 
-/** Runs the real start and role flow, so the member has a role, a DM and a posted checklist. */
+/** Runs the real channel start and role flow, so the member has a role, a channel, a link DM and a posted checklist. */
 export async function onboard(deps: Deps, memberId: string, role: Role): Promise<void> {
   await startOnboarding(deps, { memberId, startedBy: "command" });
-  await handleRole(deps, { memberId, role, channel: `D-${memberId}`, messageTs: "100.001" });
+  const channel = deps.store.get<{ channel_id: string | null }>("SELECT channel_id FROM member WHERE member_id = ?", memberId)?.channel_id ?? `D-${memberId}`;
+  await handleRole(deps, { memberId, role, channel, messageTs: "100.001" });
 }
 
 export const itemStatuses = (deps: Deps, memberId: string) =>

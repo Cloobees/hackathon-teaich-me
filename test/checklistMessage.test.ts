@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyTick, handleHomeOpened, renderChecklist } from "../src/checklistMessage.js";
+import { applyTick, createChecklist, handleHomeOpened, renderChecklist } from "../src/checklistMessage.js";
 import { getRows, itemsForRole } from "../src/checklist.js";
 import { makeDeps, onboard, type Call } from "./helpers.js";
 
@@ -72,7 +72,7 @@ describe("checklist message", () => {
     const ts = deps.store.get<{ checklist_ts: string }>("SELECT checklist_ts FROM member WHERE member_id = 'U1'")?.checklist_ts;
 
     expect(deps.fake.of("pins.add")).toHaveLength(1);
-    expect(deps.fake.of("pins.add")[0]?.args).toEqual({ channel: "D-U1", timestamp: ts });
+    expect(deps.fake.of("pins.add")[0]?.args).toEqual({ channel: "C-1", timestamp: ts });
     expect(deps.fake.of("views.publish")).toHaveLength(0);
     expect(deps.store.get<{ pin_refused: number | null }>("SELECT pin_refused FROM member WHERE member_id = 'U1'")?.pin_refused).toBeNull();
 
@@ -122,7 +122,29 @@ describe("checklist message", () => {
     expect(deps.fake.last("chat.update").ts).toBe(ts);
   });
 
-  it("a refused I4 sends one DM naming 3. Set up a Claude Project and no letter (Scenario 4)", async () => {
+  it("the checklist, acknowledgement, refusal and completion are all posted and edited in the member's channel, never in the DM (FR-CH-011)", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "N1", "non-technical");
+    await applyTick(deps, "N1", "I4", "self-attested", null); // refused: I3 is unticked
+    for (const id of ["I1", "I2", "I3", "I4", "I7"]) await applyTick(deps, "N1", id, "self-attested", null);
+
+    const channels = deps.fake.of("chat.postMessage").map((c) => c.args.channel);
+    // The link DM from the start is the only DM post.
+    expect(channels.filter((c) => c === "D-N1")).toHaveLength(1);
+    expect(channels.filter((c) => c === "C-1").length).toBe(channels.length - 1);
+    expect(deps.fake.of("chat.update").every((c) => c.args.channel === "C-1")).toBe(true);
+    expect(deps.fake.of("chat.postMessage").some((c) => String(c.args.text).includes("finished onboarding") && c.args.channel === "C-1")).toBe(true);
+  });
+
+  it("a member with no channel gets no checklist and the skip is logged as checklist_no_channel", async () => {
+    const deps = makeDeps();
+    deps.store.run("INSERT INTO member (member_id, started_by, dm_channel_id) VALUES ('U5', 'command', 'D-U5')");
+    await createChecklist(deps, "U5", "technical");
+    expect(deps.fake.of("chat.postMessage")).toHaveLength(0);
+    expect(deps.logs.some((l) => l.includes("checklist_no_channel"))).toBe(true);
+  });
+
+  it("a refused I4 posts one message in the channel naming 3. Set up a Claude Project and no letter (Scenario 4)", async () => {
     const deps = makeDeps();
     await onboard(deps, "U1", "technical");
     const updates = deps.fake.of("chat.update").length;
