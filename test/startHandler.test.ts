@@ -184,6 +184,67 @@ describe("start guards", () => {
   });
 });
 
+describe("BP-097 follow-up", () => {
+  it("a member with a stored role who left and starts again gets no welcome, no role question, one link DM and an active channel (FR-CH-004, FR-CH-005)", async () => {
+    const deps = makeDeps();
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    deps.store.run("UPDATE member SET role = 'technical', channel_state = 'member_left' WHERE member_id = 'U1'");
+    const channelPosts = posts(deps).length;
+    const dms = dmPosts(deps).length;
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    expect(posts(deps)).toHaveLength(channelPosts);
+    expect(dmPosts(deps)).toHaveLength(dms + 1);
+    expect(deps.fake.of("conversations.create")).toHaveLength(1);
+    expect(row(deps, "U1")).toMatchObject({ role: "technical", channel_state: "active" });
+  });
+
+  it("a failed create does not burn the event_id: the same event retried after the failure clears creates the channel", async () => {
+    const deps = makeDeps();
+    deps.fake.failCreate = true;
+    expect(await handleTeamJoin(deps, { memberId: "U1", eventId: "Ev1" })).toBe("channel_failed");
+    deps.fake.failCreate = false;
+    expect(await handleTeamJoin(deps, { memberId: "U1", eventId: "Ev1" })).toBe("sent");
+    expect(row(deps, "U1")).toMatchObject({ channel_id: "C-1", channel_state: "active" });
+    expect(await handleTeamJoin(deps, { memberId: "U1", eventId: "Ev1" })).toBe("duplicate");
+  });
+
+  it("a failed invite does not burn the event_id either", async () => {
+    const deps = makeDeps();
+    deps.fake.failInvite = true;
+    expect(await handleTeamJoin(deps, { memberId: "U1", eventId: "Ev1" })).toBe("invite_failed");
+    deps.fake.failInvite = false;
+    expect(await handleTeamJoin(deps, { memberId: "U1", eventId: "Ev1" })).toBe("sent");
+    expect(row(deps, "U1")?.channel_state).toBe("active");
+  });
+
+  it("an operator repeating a start names the member in the existing reply", async () => {
+    const deps = makeDeps();
+    await handleOnboard(deps, { callerId: "UOP1", text: "<@U2|sam>" });
+    deps.store.run("UPDATE member SET role = 'technical' WHERE member_id = 'U2'");
+    expect(await handleOnboard(deps, { callerId: "UOP1", text: "<@U2|sam>" })).toBe("<@U2> already has an onboarding channel: <#C-1>.");
+  });
+
+  it("a restart that reuses the channel says restarted, not created (operator and self forms)", async () => {
+    const deps = makeDeps();
+    await handleOnboard(deps, { callerId: "UOP1", text: "<@U2|sam>" });
+    expect(await handleOnboard(deps, { callerId: "UOP1", text: "<@U2|sam>" })).toBe("I have restarted <@U2>'s onboarding in <#C-1>.");
+    await handleOnboard(deps, { callerId: "U1", text: "" });
+    expect(await handleOnboard(deps, { callerId: "U1", text: "" })).toBe("I have restarted your onboarding in <#C-2>.");
+  });
+
+  it("dm_channel_id is stored only after the link post succeeded", async () => {
+    const deps = makeDeps();
+    const original = deps.slack.chat.postMessage.bind(deps.slack.chat);
+    deps.slack.chat.postMessage = (async (args: { channel: string }) => {
+      if (args.channel.startsWith("D-")) throw new Error("channel_not_found");
+      return original(args as never);
+    }) as typeof deps.slack.chat.postMessage;
+    await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
+    expect(row(deps, "U1")?.dm_channel_id).toBeNull();
+    expect(deps.logs.filter((l) => l.includes("link_dm_failed"))).toHaveLength(1);
+  });
+});
+
 describe("handleRole guard (FR-CH-012)", () => {
   it("a click on a message in a channel other than the member's is ignored and logged", async () => {
     const deps = makeDeps();

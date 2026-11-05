@@ -22,28 +22,40 @@ export interface StartInput {
  * post the welcome and the role question in it (FR-CH-003), then send the one link DM (FR-CH-005).
  */
 export async function startOnboarding(deps: Deps, input: StartInput): Promise<StartOutcome> {
+  return (await runStart(deps, input)).outcome;
+}
+
+interface StartResult {
+  outcome: StartOutcome;
+  /** True when the start made the channel (new, or the member re-entered it); false when it reused an active one. */
+  channelCreated: boolean;
+}
+
+async function runStart(deps: Deps, input: StartInput): Promise<StartResult> {
   const { memberId, startedBy } = input;
-  if (input.isBot) return "bot";
+  if (input.isBot) return { outcome: "bot", channelCreated: false };
   if (input.eventId) {
     const fresh = deps.store.run("INSERT OR IGNORE INTO processed_event (event_id, received_at) VALUES (?, ?)", input.eventId, deps.now());
-    if (!fresh) return "duplicate";
+    if (!fresh) return { outcome: "duplicate", channelCreated: false };
   }
 
   const ensured = await ensureMemberChannel(deps, { memberId, startedBy });
-  if (ensured.outcome === "create_failed") {
-    deps.log("start_failed", { member: memberId, outcome: "channel_failed" });
-    return "channel_failed";
-  }
-  if (ensured.outcome === "invite_failed") {
-    deps.log("start_failed", { member: memberId, outcome: "invite_failed" });
-    return "invite_failed";
+  if (ensured.outcome === "create_failed" || ensured.outcome === "invite_failed") {
+    const outcome = ensured.outcome === "create_failed" ? "channel_failed" : "invite_failed";
+    deps.log("start_failed", { member: memberId, outcome });
+    // A failed start must not burn the event_id: a Slack retry has to run again.
+    if (input.eventId) deps.store.run("DELETE FROM processed_event WHERE event_id = ?", input.eventId);
+    return { outcome, channelCreated: false };
   }
   const channel = ensured.channelId as string;
+  const channelCreated = ensured.outcome === "created" || ensured.outcome === "reinvited";
 
-  // A repeat start with a stored role posts nothing; after a reset cleared the role the welcome and question go out again (FR-CH-004).
-  if (ensured.outcome === "existing" && deps.store.get<{ role: Role | null }>("SELECT role FROM member WHERE member_id = ?", memberId)?.role) {
+  // With a role stored the welcome and the role question never go out again, whatever the outcome (FR-CH-004).
+  // A member re-entering the channel still gets the one link DM; after a reset cleared the role both posts go out again.
+  if (deps.store.get<{ role: Role | null }>("SELECT role FROM member WHERE member_id = ?", memberId)?.role) {
+    if (ensured.outcome === "reinvited") await sendLinkDm(deps, memberId, channel, ensured.teamId);
     deps.log("start", { member: memberId, started_by: startedBy, outcome: "existing" });
-    return "existing";
+    return { outcome: "existing", channelCreated };
   }
 
   const defs = roleDefinitions(deps.libraryDir);
@@ -79,9 +91,9 @@ export async function startOnboarding(deps: Deps, input: StartInput): Promise<St
     ],
   });
 
-  if (ensured.outcome === "created" || ensured.outcome === "reinvited") await sendLinkDm(deps, memberId, channel, ensured.teamId);
+  if (channelCreated) await sendLinkDm(deps, memberId, channel, ensured.teamId);
   deps.log("start", { member: memberId, started_by: startedBy, outcome: "sent" });
-  return "sent";
+  return { outcome: "sent", channelCreated };
 }
 
 /** The one DM of the start flow: a link to the channel. A failure is logged and changes nothing else (FR-CH-005, FR-CH-026). */
@@ -89,8 +101,8 @@ async function sendLinkDm(deps: Deps, memberId: string, channel: string, teamId?
   try {
     const dm = (await deps.slack.conversations.open({ users: memberId })).channel?.id;
     if (!dm) throw new Error("conversations.open returned no channel");
-    deps.store.run("UPDATE member SET dm_channel_id = ? WHERE member_id = ?", dm, memberId);
     await deps.slack.chat.postMessage({ channel: dm, text: `Your onboarding channel is ready: ${channelLink(channel, teamId)}. Open it to start.` });
+    deps.store.run("UPDATE member SET dm_channel_id = ? WHERE member_id = ?", dm, memberId);
   } catch (error) {
     deps.log("link_dm_failed", { member: memberId, error: (error as Error).message });
   }
@@ -111,12 +123,14 @@ export async function handleOnboard(deps: Deps, input: { callerId: string; text:
     deps.log("onboard_refused", { member: input.callerId, outcome: "not_operator" });
     return OPERATOR_ONLY;
   }
-  const outcome = await startOnboarding(deps, { memberId: target, startedBy: "command", eventId: input.triggerId });
+  const { outcome, channelCreated } = await runStart(deps, { memberId: target, startedBy: "command", eventId: input.triggerId });
   if (outcome === "channel_failed") return "I could not create the onboarding channel. An operator can check the app log.";
   if (outcome === "invite_failed") return "I created the channel but could not invite the member.";
   const channel = memberChannel(deps.store, target)?.id;
-  if (outcome === "existing") return `You already have an onboarding channel: <#${channel}>.`;
-  return target === input.callerId ? `I have created your onboarding channel: <#${channel}>. Open it to start.` : `I have created <@${target}>'s onboarding channel.`;
+  const self = target === input.callerId;
+  if (outcome === "existing") return self ? `You already have an onboarding channel: <#${channel}>.` : `<@${target}> already has an onboarding channel: <#${channel}>.`;
+  if (!channelCreated) return self ? `I have restarted your onboarding in <#${channel}>.` : `I have restarted <@${target}>'s onboarding in <#${channel}>.`;
+  return self ? `I have created your onboarding channel: <#${channel}>. Open it to start.` : `I have created <@${target}>'s onboarding channel.`;
 }
 
 /** A role button click. The first click stores the role and creates the checklist; later clicks change nothing. */
