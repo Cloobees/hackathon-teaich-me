@@ -132,16 +132,17 @@ describe("instruction message", () => {
     expect(instructions(deps)).toHaveLength(instructionsBefore);
   });
 
-  it("the I4 instruction is followed by one zip upload to the member's DM, and no other item uploads (FR-VF-013)", async () => {
+  it("the I4 instruction is followed by one zip upload into the member's channel, and no other item uploads (FR-VF-013)", async () => {
     const deps = makeDeps();
     await onboard(deps, "U1", "technical");
     for (const id of ["I1", "I2"]) await applyTick(deps, "U1", id, "self-attested", null);
     expect(deps.fake.of("files.uploadV2")).toHaveLength(0);
 
     await applyTick(deps, "U1", "I3", "self-attested", null);
+    const channel = deps.store.get<{ channel_id: string }>("SELECT channel_id FROM member WHERE member_id = ?", "U1")!.channel_id;
     const order = deps.fake.calls.map((c) => c.method);
     expect(deps.fake.of("files.uploadV2")).toHaveLength(1);
-    expect(deps.fake.of("files.uploadV2")[0]?.args).toMatchObject({ channel_id: "D-U1", filename: "copilot-check.zip" });
+    expect(deps.fake.of("files.uploadV2")[0]?.args).toMatchObject({ channel_id: channel, filename: "copilot-check.zip" });
     expect(order.at(-1)).toBe("files.uploadV2");
     expect(order.at(-2)).toBe("chat.postMessage");
     expect(actionIds(deps.fake.of("chat.postMessage").at(-1))).toEqual(["attest_I4"]);
@@ -150,7 +151,7 @@ describe("instruction message", () => {
     expect(deps.fake.of("files.uploadV2")).toHaveLength(1);
   });
 
-  it("with no zip path or a missing file the I4 instruction still posts and the member gets the one I did it DM", async () => {
+  it("with no zip path or a missing file the I4 instruction still posts and the member gets the one I did it fallback in the channel", async () => {
     for (const skillZipPath of [undefined, "library-files/does-not-exist.zip"]) {
       const deps = makeDeps({ skillZipPath });
       await onboard(deps, "U1", "technical");
