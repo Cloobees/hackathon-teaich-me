@@ -1,5 +1,5 @@
 import { errorCode } from "./channel.js";
-import { detailOf } from "./checklistSurfaceCanvas.js";
+import { bodyFor, detailOf } from "./checklistSurfaceCanvas.js";
 import type { Deps } from "./deps.js";
 
 export const PROBE_OPERATOR_ONLY = "The canvas probe is for operators.";
@@ -31,8 +31,14 @@ export async function runCanvasProbe(deps: Deps, callerId: string): Promise<stri
     deps.log("canvas_probe_refused", { member: callerId, outcome: "not_operator" });
     return PROBE_OPERATOR_ONLY;
   }
+  // The exact markdown the checklist sends for each role, with the configured glossary link and the real item names.
+  const real: Variant[] = (["technical", "non-technical"] as const).map((role) => ({
+    name: `the real ${role} checklist body`,
+    args: { title: "Onboarding checklist", document_content: md(bodyFor(deps, role, [])) },
+  }));
+  const variants = [...VARIANTS, ...real];
   const lines: string[] = [];
-  for (const variant of VARIANTS) {
+  for (const variant of variants) {
     try {
       const id = (await deps.slack.canvases.create(variant.args)).canvas_id;
       if (!id) throw new Error("no_canvas_id");
@@ -55,7 +61,7 @@ export async function runCanvasProbe(deps: Deps, callerId: string): Promise<stri
   const verdict =
     failed === 0
       ? "Slack accepts every variant, so the content is not the problem."
-      : failed === VARIANTS.length
+      : failed === variants.length
         ? "Slack refuses every variant, even an empty canvas: canvases are not available to this app or workspace."
         : "Slack accepts some variants and refuses others: the first refused one above is what to change.";
   return `Canvas probe (standalone canvases, each deleted afterwards):\n${lines.join("\n")}\n${verdict}`;

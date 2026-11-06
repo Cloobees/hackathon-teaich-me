@@ -47,7 +47,7 @@ const POINTER_TEXT = "Your onboarding checklist is the canvas in this channel's 
 export const canvasLabel = (deps: Deps, role: Role, item: ItemDef): string => `Step ${position(deps.items, role, item.id)}: ${item.name}`;
 
 /** The whole canvas as markdown: the glossary line first, then one task line per item, ticked from the store's rows. */
-function bodyFor(deps: Deps, role: Role, rows: ChecklistRow[]): string {
+export function bodyFor(deps: Deps, role: Role, rows: ChecklistRow[]): string {
   const lines = itemsForRole(deps.items, role).map((item) => {
     const ticked = rows.some((r) => r.item_id === item.id && r.status === "ticked");
     return `- [${ticked ? "x" : " "}] ${canvasLabel(deps, role, item)}`;

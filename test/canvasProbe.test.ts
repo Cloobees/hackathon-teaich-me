@@ -13,10 +13,10 @@ describe("/onboard-ch canvas-probe", () => {
   it("makes one standalone canvas per variant, deletes each, and says Slack accepts all", async () => {
     const deps = makeDeps();
     const reply = await handleOnboard(deps, { callerId: "UOP1", text: "canvas-probe" });
-    expect(deps.fake.of("canvases.create")).toHaveLength(6);
-    expect(deps.fake.of("canvases.delete")).toHaveLength(6);
+    expect(deps.fake.of("canvases.create")).toHaveLength(8);
+    expect(deps.fake.of("canvases.delete")).toHaveLength(8);
     expect(reply).toContain("the content is not the problem");
-    expect(reply.match(/:white_check_mark:/g)).toHaveLength(6);
+    expect(reply.match(/:white_check_mark:/g)).toHaveLength(8);
   });
 
   it("names the variants Slack refuses and says which to change", async () => {
@@ -43,5 +43,18 @@ describe("/onboard-ch canvas-probe", () => {
     deps.fake.failCanvasDelete = true;
     const reply = await handleOnboard(deps, { callerId: "UOP1", text: "canvas-probe" });
     expect(reply).toContain("not deleted (no_permission)");
+  });
+});
+
+describe("the probe's real-body variants", () => {
+  it("send the exact markdown the checklist builds for each role, with the configured glossary link", async () => {
+    const deps = makeDeps({ glossaryUrl: "https://acme.slack.com/docs/T1/F1" });
+    await handleOnboard(deps, { callerId: "UOP1", text: "canvas-probe" });
+    const sent = deps.fake.of("canvases.create").map((c) => (c.args as { document_content?: { markdown: string } }).document_content?.markdown ?? "");
+    const technical = sent.find((m) => m.includes("Connect Atlassian"));
+    const nonTechnical = sent.filter((m) => m.startsWith("The glossary canvas: https://acme.slack.com/docs/T1/F1") && !m.includes("Connect Atlassian") && m.includes("Step 5"));
+    expect(technical).toContain("The glossary canvas: https://acme.slack.com/docs/T1/F1");
+    expect(technical).toContain("- [ ] Step 7: ");
+    expect(nonTechnical.length).toBeGreaterThan(0);
   });
 });
