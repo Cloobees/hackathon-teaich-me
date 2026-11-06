@@ -72,35 +72,35 @@ describe("most-waiting item (Scenario 6)", () => {
   });
 });
 
-describe("I7 (Scenarios 7 and 8)", () => {
-  it("is the last item for both roles: 7 items for technical, 5 for non-technical", () => {
+describe("I6 (Scenarios 7 and 8)", () => {
+  it("is the last item for both roles: 6 items for technical, 5 for non-technical", () => {
     const store = openStore(":memory:");
     addMember(store, "T1", "technical", all("technical"));
     addMember(store, "N1", "non-technical", all("non-technical"));
     const items = getMetrics(store, config).items;
-    expect(items.filter((i) => i.ticks.technical !== null)).toHaveLength(7);
+    expect(items.filter((i) => i.ticks.technical !== null)).toHaveLength(6);
     expect(items.filter((i) => i.ticks["non-technical"] !== null)).toHaveLength(5);
-    expect(items.at(-1)?.id).toBe("I7");
-    expect(items.find((i) => i.id === "I7")?.ticks.all?.total).toBe(2);
+    expect(items.at(-1)?.id).toBe("I6");
+    expect(items.find((i) => i.id === "I6")?.ticks.all?.total).toBe(2);
   });
   it("is the most-waiting item when two members have ticked everything before it", () => {
     const store = openStore(":memory:");
-    addMember(store, "T1", "technical", 6);
+    addMember(store, "T1", "technical", 5);
     addMember(store, "N1", "non-technical", 4);
-    expect(getMetrics(store, config).groups.all.mostWaiting).toMatchObject({ item: "I7", members: 2 });
+    expect(getMetrics(store, config).groups.all.mostWaiting).toMatchObject({ item: "I6", members: 2 });
   });
-  it("counts two self-attested I7 ticks as self-attested 2 and observed 0", () => {
+  it("counts two self-attested I6 ticks as self-attested 2 and observed 0", () => {
     const store = openStore(":memory:");
     addMember(store, "T1", "technical", all("technical"));
     addMember(store, "N1", "non-technical", all("non-technical"));
-    const i7 = getMetrics(store, config).items.find((i) => i.id === "I7");
-    expect(i7?.methods).toMatchObject({ "self-attested": { total: 2 }, observed: { total: 0 }, validated: { total: 0 } });
+    const i6 = getMetrics(store, config).items.find((i) => i.id === "I6");
+    expect(i6?.methods).toMatchObject({ "self-attested": { total: 2 }, observed: { total: 0 }, validated: { total: 0 } });
   });
-  it("seeded I7 ticks are self-attested only", () => {
+  it("seeded I6 ticks are self-attested only", () => {
     const store = openStore(":memory:");
     seedCohort(store, config, now);
-    const i7 = getMetrics(store, config).items.find((i) => i.id === "I7");
-    expect(i7?.methods).toMatchObject({ "self-attested": { total: 10, seeded: 10 }, observed: { total: 0 } });
+    const i6 = getMetrics(store, config).items.find((i) => i.id === "I6");
+    expect(i6?.methods).toMatchObject({ "self-attested": { total: 10, seeded: 10 }, observed: { total: 0 } });
   });
   it("no item id or name starts with a list number", () => {
     const store = openStore(":memory:");

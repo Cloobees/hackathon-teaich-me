@@ -3,7 +3,7 @@ import { createRows, getRows, nextPending, tick, type ChecklistRow, type ItemDef
 import { selectSurface } from "./checklistSurface.js";
 import type { Deps } from "./deps.js";
 import { glossaryBlock } from "./glossary.js";
-import { instructionButtons, itemLabel, sendInstruction } from "./instruction.js";
+import { doneLine, instructionButtons, itemLabel, sendInstruction } from "./instruction.js";
 import type { Block } from "./slack.js";
 import type { Method, Role } from "./store.js";
 
@@ -97,7 +97,9 @@ export async function applyTick(deps: Deps, memberId: string, itemId: string, me
   if (result.status === "ticked") {
     await isolated(deps, memberId, "checklist_failed", "surface_update", () => selectSurface(deps, memberId).update(deps, memberId, getRows(deps.store, memberId), result.ticked));
     if (result.completed) {
-      await safePost(deps, memberId, { channel, text: `You have finished onboarding. ${glossaryLine(deps)} ${deps.items.help}`.trim() }, "completion");
+      // The last step has no next instruction to carry the Done line, so the completion message opens with it.
+      const finished = `You have finished onboarding. ${glossaryLine(deps)} ${deps.items.help}`.trim();
+      await safePost(deps, memberId, { channel, text: [doneLine(deps, role, result.ticked), finished].filter(Boolean).join("\n") }, "completion");
     } else {
       await isolated(deps, memberId, "checklist_failed", "instruction", () => sendInstruction(deps, memberId, channel, role, result.ticked));
     }

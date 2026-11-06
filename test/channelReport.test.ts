@@ -15,7 +15,7 @@ const SENT_USING = " *Sent using* <@U0CDESX6B0V>";
 const i2Block = (activity = "2026-10-26T10:12:00Z") =>
   `COPILOT-REPORT v1\nitem: I2\nemail: sam@example.com\nlast_activity: ${activity}${SENT_USING}`;
 const i4Block = `COPILOT-REPORT v1\nitem: I4\nskill: copilot-check${SENT_USING}`;
-const i6Block = `COPILOT-REPORT v1\nitem: I6\nsite_count: 2${SENT_USING}`;
+const i5Block = `COPILOT-REPORT v1\nitem: I5\nsite_count: 2${SENT_USING}`;
 
 async function ready(attestI1 = true): Promise<D> {
   const deps = makeDeps();
@@ -56,10 +56,10 @@ describe("channel report listener (BP-075)", () => {
     expect(new Set(rows.map((r) => r.evidence_ref))).toEqual(new Set(["3.3"]));
   });
 
-  it("a valid I6 block ticks I6", async () => {
+  it("a valid I5 block ticks I5", async () => {
     const deps = await ready();
-    await report(deps, i6Block, "4.4");
-    expect(row(deps, "I6")).toMatchObject({ method: "validated", evidence_ref: "4.4" });
+    await report(deps, i5Block, "4.4");
+    expect(row(deps, "I5")).toMatchObject({ method: "validated", evidence_ref: "4.4" });
   });
 
   it("the exact observed text, with ' *Sent using* <@U0CDESX6B0V>' on the skill line, ticks I4 (Scenario 1, FR-VF-016)", async () => {
@@ -207,12 +207,8 @@ describe("I1 mention listener in the bound channel (FR-VF-003, FR-VF-017)", () =
   });
 });
 
-describe("Claude app id and harness repo reach the rules (Scenarios 1 and 15)", () => {
-  const i5Block = (repo: string) => `COPILOT-REPORT v1
-item: I5
-repo: ${repo}${SENT_USING}`;
-
-  it("while the Claude app id is unknown no report ticks; the channel gets one message naming the Claude rule", async () => {
+describe("Claude app id reaches the rules (Scenario 1)", () => {
+    it("while the Claude app id is unknown no report ticks; the channel gets one message naming the Claude rule", async () => {
     const deps = await ready();
     const before = posts(deps);
     await handleChannelReport(deps, { channel: BOUND, user: "U1", text: i2Block(), ts: "9.1" });
@@ -225,24 +221,6 @@ repo: ${repo}${SENT_USING}`;
     const deps = await ready();
     await report(deps, i2Block().replace("U0CDESX6B0V", "U0SOMEONE"));
     expect(itemStatuses(deps, "U1").I2).toBe("pending");
-  });
-
-  it("with HARNESS_REPO set, a different repo leaves I5 pending and the same repo ticks it", async () => {
-    const deps = await ready();
-    deps.harnessRepo = "synechron/harness";
-    const before = posts(deps);
-    await report(deps, i5Block("other/repo"), "9.2");
-    expect(itemStatuses(deps, "U1").I5).toBe("pending");
-    expect(posts(deps)).toBe(before + 1);
-    expect(deps.fake.last("chat.postMessage").text).toMatch(/repo/i);
-    await report(deps, i5Block("Synechron/Harness"), "9.3");
-    expect(itemStatuses(deps, "U1").I5).toBe("ticked");
-  });
-
-  it("with HARNESS_REPO unset, any non-empty repo ticks I5", async () => {
-    const deps = await ready();
-    await report(deps, i5Block("any/repo"), "9.4");
-    expect(itemStatuses(deps, "U1").I5).toBe("ticked");
   });
 });
 

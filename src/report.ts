@@ -1,6 +1,6 @@
 const SUPPORTED_VERSION = 1;
-export type ReportItem = "I2" | "I3" | "I4" | "I5" | "I6";
-const REPORT_ITEM_IDS: readonly string[] = ["I2", "I3", "I4", "I5", "I6"];
+export type ReportItem = "I2" | "I3" | "I4" | "I5";
+const REPORT_ITEM_IDS: readonly string[] = ["I2", "I3", "I4", "I5"];
 
 export type Rule =
   | "channel"
@@ -13,8 +13,7 @@ export type Rule =
   | "i2-activity"
   | "i3-project"
   | "i4-skill"
-  | "i5-repo"
-  | "i6-sites";
+  | "i5-sites";
 
 export type Validation = { ok: true; item: ReportItem } | { ok: false; rule: Rule; message: string };
 
@@ -70,8 +69,6 @@ export interface ValidateContext {
   roleChosenAt: string | null;
   /** Slack user id of the Claude app (`claude_app_user_id`); while unknown, no report passes the Claude mark rule. */
   claudeAppId?: string;
-  /** `owner/name` the I5 `repo` must equal (HARNESS_REPO); unset accepts any non-empty repo. */
-  harnessRepo?: string;
 }
 
 /**
@@ -88,7 +85,7 @@ export function validateReport(text: string, ctx: ValidateContext): Validation {
   const f = report.fields;
   const item = f.item;
   if (!item) return fail("malformed", "That does not look like a COPILOT-REPORT block. Post the block again, unchanged.");
-  if (!REPORT_ITEM_IDS.includes(item)) return fail("item", `${item} has no report block. I read reports for I2 to I6.`);
+  if (!REPORT_ITEM_IDS.includes(item)) return fail("item", `${item} has no report block. I read reports for I2 to I5.`);
 
   if (item === "I2") {
     const expected = ctx.memberEmail?.toLowerCase();
@@ -107,14 +104,8 @@ export function validateReport(text: string, ctx: ValidateContext): Validation {
     if (!f.project_name) return fail("i3-project", "The block names no Claude Project. Set up a Project, then ask your Claude to post the report again.");
   } else if (item === "I4") {
     if (f.skill !== "copilot-check") return fail("i4-skill", "The block does not come from the copilot-check skill.");
-  } else if (item === "I5") {
-    if (!f.repo) return fail("i5-repo", "The block names no repository. Connect GitHub, then ask your Claude to post the report again.");
-    const harness = ctx.harnessRepo?.trim().toLowerCase();
-    if (harness && f.repo.trim().toLowerCase() !== harness) {
-      return fail("i5-repo", "The repository in the block is not the harness repo. Connect GitHub to the harness repo, then ask your Claude to post the report again.");
-    }
   } else if (!/^\d+$/.test(f.site_count ?? "") || Number.parseInt(f.site_count as string, 10) < 1) {
-    return fail("i6-sites", "The block shows no Atlassian site. Authorise the Atlassian connector, then ask your Claude to post the report again.");
+    return fail("i5-sites", "The block shows no Atlassian site. Authorise the Atlassian connector, then ask your Claude to post the report again.");
   }
   return { ok: true, item: item as ReportItem };
 }

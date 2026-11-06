@@ -40,7 +40,7 @@ describe("dashboard server", () => {
   it("shows the same figures whether channel columns are populated or null, and no channel, member id, name or email (Scenario 28, FR-CH-025)", async () => {
     // The same members and ticks in two stores: one with all five channel columns set (varied states), one with them null.
     const members = [
-      { id: "U0CHAN001", role: "technical", ticked: 7, state: "active", name: "ada-lovelace" },
+      { id: "U0CHAN001", role: "technical", ticked: 6, state: "active", name: "ada-lovelace" },
       { id: "U0CHAN002", role: "technical", ticked: 3, state: "member_left", name: "grace-hopper" },
       { id: "U0CHAN003", role: "non-technical", ticked: 5, state: "lost", name: "alan-turing" },
       { id: "U0CHAN004", role: "non-technical", ticked: 1, state: "active", name: "edsger-dijkstra" },
@@ -82,7 +82,7 @@ describe("dashboard server", () => {
     }
     expect(metrics).not.toContain("onboarding-copilot");
     expect(metrics).not.toContain("@");
-    // Item names may say "channel" (I7 joins the help channel); no field or value may name a member channel.
+    // Item names may say "channel" (I6 joins the help channel); no field or value may name a member channel.
     expect(metrics).not.toMatch(/member_id|email|channel_|canvas|"C0|"F0/i);
   });
 

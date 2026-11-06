@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { safePost } from "./channel.js";
 import { getRows, itemsForRole, nextPending, position, type ItemDef } from "./checklist.js";
 import type { Deps } from "./deps.js";
@@ -32,7 +34,7 @@ export function instructionText(deps: Deps, item: ItemDef, role: Role, channelId
     const file = instructionFor(deps.libraryDir, item.id, role);
     if (file?.action) {
       const check = file.check ? `*I check:* ${file.check}` : "*You confirm:* I cannot check this step, so click *I did it* when you have done it.";
-      return fill(`*Do this:* ${file.action}\n${check}`, { channelName: channelId, botMention: deps.botMention ?? "@onboarding-copilot" });
+      return fill(`*Do this:*\n${file.action}\n${check}`, { channelName: channelId, botMention: deps.botMention ?? "@onboarding-copilot" });
     }
     const text = file?.body;
     if (text) return text.length > MAX_INSTRUCTION ? `${text.slice(0, MAX_INSTRUCTION)}...` : text;
@@ -67,6 +69,59 @@ export function splitMrkdwn(text: string, max = MAX_SECTION): string[] {
   return parts;
 }
 
+// A line `{image:name.png}` in an item file's action marks where an image from assets/ goes. Slack cannot hold a custom
+// image inside a line of text, so the instruction is posted in two parts: the text above the line with the image under it
+// (one file post), then the text below the line with the button.
+const IMAGE_LINE = /^[ \t]*\{image:\s*([\w.-]+)\s*\}[ \t]*\r?\n?/m;
+
+/** Splits instruction text at its image line, or undefined when it has none. */
+export function splitAtImage(text: string): { before: string; image: string; after: string } | undefined {
+  const m = IMAGE_LINE.exec(text);
+  return m ? { before: text.slice(0, m.index).trimEnd(), image: m[1] as string, after: text.slice(m.index + m[0].length) } : undefined;
+}
+
+/** The instruction text with its image line removed, for when the image cannot be sent. */
+export const withoutImage = (text: string): string => text.replace(IMAGE_LINE, "");
+
+const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** The ts of the newest message in the channel, or undefined when it cannot be read. */
+async function latestTs(deps: Deps, channel: string): Promise<string | undefined> {
+  try {
+    return (await deps.slack.conversations.history({ channel, limit: 1 })).messages?.[0]?.ts;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Slack posts a file's message a moment after the upload call returns, so a message sent straight away can land above it.
+ * Waits until the channel shows the file (up to about 6 seconds), or for a fixed 2 seconds when the history cannot be read.
+ * Never throws: after the wait the caller posts whatever happens.
+ */
+async function waitForFilePost(deps: Deps, channel: string, filename: string, after: string | undefined): Promise<void> {
+  const sleep = deps.sleep ?? realSleep;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    try {
+      const { messages } = await deps.slack.conversations.history({ channel, limit: 5, ...(after ? { oldest: after } : {}) });
+      if (messages?.some((m) => m.files?.some((f) => f.name === filename))) return;
+    } catch (error) {
+      deps.log("instruction_image_wait_failed", { error: (error as Error).message });
+      await sleep(2000);
+      return;
+    }
+    await sleep(500);
+  }
+  deps.log("instruction_image_wait_timeout", { image: filename });
+}
+
+/** The line that thanks the member for the steps a tick just completed, or "" when there are none (FR-CL-010). */
+export function doneLine(deps: Deps, role: Role, ticked: string[]): string {
+  const items = itemsForRole(deps.items, role);
+  const done = ticked.flatMap((id) => items.find((i) => i.id === id) ?? []).map((item) => `*${itemLabel(deps, role, item)}*`);
+  return done.length ? `:white_check_mark: Done: ${done.join(" and ")}.` : "";
+}
+
 /** The buttons of an item's instruction message: "I did it" and nothing else, for every item (FR-VF-001). */
 export function instructionButtons(item: ItemDef): Block[] {
   return [{ type: "button", action_id: `attest_${item.id}`, value: item.id, text: { type: "plain_text", text: "I did it" }, confirm: confirmDialog(item) }];
@@ -86,15 +141,35 @@ export async function sendInstruction(deps: Deps, memberId: string, channel: str
   const next = nextPending(items, getRows(deps.store, memberId));
   if (!next) return;
 
-  const done = ticked.flatMap((id) => items.find((i) => i.id === id) ?? []).map((item) => `*${itemLabel(deps, role, item)}*`);
   const mrkdwn = (text: string): Block => ({ type: "section", text: { type: "mrkdwn", text } });
-  const ack = done.length ? `:white_check_mark: Done: ${done.join(" and ")}.` : "";
-  const heading = `${done.length ? "Next: " : ""}*${itemLabel(deps, role, next)}*`;
+  const ack = doneLine(deps, role, ticked);
+  const heading = `${ack ? ":arrow_forward: Next: " : ""}*${itemLabel(deps, role, next)}*`;
   // `{channelName}` carries the member's stored channel id, for every item including I1 (FR-CH-013).
-  const instruction = `${heading}\n${instructionText(deps, next, role, getMemberChannel(deps.store, memberId)?.id ?? channel)}`;
+  let instruction = `${heading}\n${instructionText(deps, next, role, getMemberChannel(deps.store, memberId)?.id ?? channel)}`;
 
-  const blocks: Block[] = [...(ack ? [mrkdwn(ack)] : []), ...splitMrkdwn(instruction).map(mrkdwn), { type: "actions", elements: instructionButtons(next) }];
-  const posted = await safePost(deps, memberId, { channel, text: [ack, instruction].filter(Boolean).join("\n"), blocks }, "instruction");
+  // With an image line, the text above it goes up with the image under it; the rest follows with the button.
+  let lead = ack;
+  const split = splitAtImage(instruction);
+  if (split) {
+    try {
+      const after = await latestTs(deps, channel);
+      await deps.slack.files.uploadV2({
+        channel_id: channel,
+        file: readFileSync(join(deps.assetsDir ?? "assets", split.image)),
+        filename: split.image,
+        initial_comment: [ack, split.before].filter(Boolean).join("\n"),
+      });
+      await waitForFilePost(deps, channel, split.image, after);
+      instruction = split.after;
+      lead = "";
+    } catch (error) {
+      deps.log("instruction_image_failed", { member: memberId, item: next.id, image: split.image, error: (error as Error).message });
+      instruction = withoutImage(instruction);
+    }
+  }
+
+  const blocks: Block[] = [...(lead ? [mrkdwn(lead)] : []), ...splitMrkdwn(instruction).map(mrkdwn), { type: "actions", elements: instructionButtons(next) }];
+  const posted = await safePost(deps, memberId, { channel, text: [lead, instruction].filter(Boolean).join("\n"), blocks }, "instruction");
   if (!posted) return;
   deps.log("instruction_sent", { member: memberId, item: next.id, outcome: "posted" });
   // The skill step needs the zip in hand, so it follows the I4 instruction (FR-VF-013).

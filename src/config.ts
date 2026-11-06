@@ -1,5 +1,8 @@
-import "dotenv/config";
+import { config as loadDotenv } from "dotenv";
 import { loadGatewayConfig, type GatewayConfig } from "./gateway.js";
+
+// `.env` wins over variables already exported in the shell, so a stale SLACK_APP_TOKEN there cannot connect the bot to another app.
+loadDotenv({ override: true, quiet: true });
 
 function required(name: string): string {
   const value = process.env[name];
@@ -38,9 +41,9 @@ export interface CopilotConfig {
   dashboardPort: number;
   glossaryUrl?: string;
   skillZipPath: string;
+  /** Folder of the images an instruction can show (`{image:name.png}` in an item file). */
+  assetsDir: string;
   botMention: string;
-  /** `owner/name` the I5 report must name; unset accepts any non-empty repo. */
-  harnessRepo?: string;
   /** Slack `app_id` of the Claude app (`A...`), for workspaces where the connector footer carries no `<@...>` mention. */
   claudeAppId?: string;
   /** Where the checklist is drawn (CHECKLIST_SURFACE): `message` unless the value is exactly `canvas` or `both` (the pinned message and the canvas together). */
@@ -70,10 +73,10 @@ export function loadCopilotConfig(env: NodeJS.ProcessEnv = process.env): Copilot
     glossaryUrl: env.GLOSSARY_CANVAS_URL || undefined,
     // The copilot-check zip sits in library-files/, beside library/ so the question handler never reads it (FR-AS-011).
     skillZipPath: env.SKILL_ZIP_PATH || "library-files/copilot-check.zip",
+    assetsDir: env.ASSETS_DIR || "assets",
     // Member-visible text for the /invite step. /invite resolves an @handle, not a display name with a space, so this is
     // the bot user's display_name from the manifest (onboarding-copilot).
     botMention: env.BOT_MENTION || DEFAULT_BOT_MENTION,
-    harnessRepo: env.HARNESS_REPO?.trim() || undefined,
     claudeAppId: env.CLAUDE_APP_ID?.trim() || undefined,
     checklistSurface: parseSurface(env.CHECKLIST_SURFACE),
   };

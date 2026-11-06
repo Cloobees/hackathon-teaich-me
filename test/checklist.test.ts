@@ -14,20 +14,20 @@ function member(store: Store, id: string, role: "technical" | "non-technical") {
 }
 
 describe("createRows (Scenario 1)", () => {
-  it("makes 5 rows for non-technical and 7 for technical, all pending", () => {
+  it("makes 5 rows for non-technical and 6 for technical, all pending", () => {
     const store = openStore(":memory:");
     member(store, "N1", "non-technical");
     member(store, "T1", "technical");
     expect(getRows(store, "N1")).toHaveLength(5);
-    expect(getRows(store, "T1")).toHaveLength(7);
+    expect(getRows(store, "T1")).toHaveLength(6);
     for (const row of getRows(store, "T1")) expect(row).toMatchObject({ status: "pending", method: null, ticked_at: null, evidence_ref: null });
   });
 });
 
 describe("position (Scenario 12)", () => {
   it("numbers an item by its place in the role's own checklist", () => {
-    expect(position(config, "non-technical", "I7")).toBe(5);
-    expect(position(config, "technical", "I7")).toBe(7);
+    expect(position(config, "non-technical", "I6")).toBe(5);
+    expect(position(config, "technical", "I6")).toBe(6);
     for (const role of ["technical", "non-technical"] as const) {
       ["I1", "I2", "I3", "I4"].forEach((id, index) => expect(position(config, role, id)).toBe(index + 1));
     }
@@ -35,11 +35,11 @@ describe("position (Scenario 12)", () => {
   it("is undefined for an item the role does not have", () => {
     expect(position(config, "non-technical", "I5")).toBeUndefined();
   });
-  it("I7 is last for both roles and its name carries the configured help channel", () => {
+  it("I6 is last for both roles and its name carries the configured help channel", () => {
     expect(config.helpChannel).toBe("int-sf-ai");
     for (const role of ["technical", "non-technical"] as const) {
       const last = itemsForRole(config, role).at(-1);
-      expect(last).toMatchObject({ id: "I7", order: 7, name: "Join the int-sf-ai channel" });
+      expect(last).toMatchObject({ id: "I6", order: 6, name: "Join the int-sf-ai channel" });
     }
   });
 });
@@ -74,14 +74,14 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
     expect(rowCount(store, "report_nonce", "T1")).toBe(1);
     expect(memberRow(store, "T1")).toEqual({ role: null, role_chosen_at: null, dm_channel_id: "D-T1", checklist_ts: null, completed_at: null });
     expect(channelOf(store, "T1")).toEqual({ name: "onboarding-copilot-T1", id: "G-T1" });
-    expect(rowCount(store, "checklist_item", "T2")).toBe(7);
+    expect(rowCount(store, "checklist_item", "T2")).toBe(6);
     expect(rowCount(store, "report_nonce", "T2")).toBe(1);
   });
   it("resetMember does nothing to a seeded member", () => {
     const store = openStore(":memory:");
     started(store, "S1", 1);
     resetMember(store, "S1");
-    expect(rowCount(store, "checklist_item", "S1")).toBe(7);
+    expect(rowCount(store, "checklist_item", "S1")).toBe(6);
     expect(rowCount(store, "report_nonce", "S1")).toBe(1);
     expect(memberRow(store, "S1")).toMatchObject({ role: "technical", checklist_ts: "100.1", completed_at: "t" });
     expect(channelOf(store, "S1")).toEqual({ name: "onboarding-copilot-S1", id: "G-S1" });
@@ -98,7 +98,7 @@ describe("reset (FR-CL-014, Scenario 14)", () => {
       expect(memberRow(store, id)).toMatchObject({ role: null, completed_at: null });
       expect(channelOf(store, id)).toEqual({ name: `onboarding-copilot-${id}`, id: `G-${id}` });
     }
-    expect(rowCount(store, "checklist_item", "S1")).toBe(7);
+    expect(rowCount(store, "checklist_item", "S1")).toBe(6);
   });
   it("after a reset a role can be stored again", () => {
     const store = openStore(":memory:");
@@ -132,7 +132,7 @@ describe("tick", () => {
   it("accepts any other item out of order", () => {
     const store = openStore(":memory:");
     member(store, "T1", "technical");
-    expect(tick(store, config, "T1", "I6", "self-attested", null, now).status).toBe("ticked");
+    expect(tick(store, config, "T1", "I5", "self-attested", null, now).status).toBe("ticked");
   });
   it("a validated I4 ticks I3 too with one evidence_ref (Scenario 5)", () => {
     const store = openStore(":memory:");
@@ -162,20 +162,20 @@ describe("tick", () => {
     for (const id of ["I1", "I2", "I3"]) tick(store, config, "N1", id, "self-attested", null, now);
     expect(tick(store, config, "N1", "I4", "self-attested", null, now)).toMatchObject({ completed: false });
     expect(store.get<{ completed_at: string | null }>("SELECT completed_at FROM member WHERE member_id = 'N1'")?.completed_at).toBeNull();
-    expect(tick(store, config, "N1", "I7", "self-attested", null, now)).toMatchObject({ completed: true });
-    expect(tick(store, config, "N1", "I7", "self-attested", null, now)).toEqual({ status: "unchanged" });
+    expect(tick(store, config, "N1", "I6", "self-attested", null, now)).toMatchObject({ completed: true });
+    expect(tick(store, config, "N1", "I6", "self-attested", null, now)).toEqual({ status: "unchanged" });
     expect(store.get<{ completed_at: string }>("SELECT completed_at FROM member WHERE member_id = 'N1'")?.completed_at).toBe(now());
   });
-  it("a technical member completes at I7, not I6", () => {
+  it("a technical member completes at I6, not I5", () => {
     const store = openStore(":memory:");
     member(store, "T1", "technical");
-    for (const id of ["I1", "I2", "I3", "I4", "I5", "I6"]) expect(tick(store, config, "T1", id, "self-attested", null, now)).toMatchObject({ completed: false });
-    expect(tick(store, config, "T1", "I7", "self-attested", null, now)).toMatchObject({ completed: true });
+    for (const id of ["I1", "I2", "I3", "I4", "I5"]) expect(tick(store, config, "T1", id, "self-attested", null, now)).toMatchObject({ completed: false });
+    expect(tick(store, config, "T1", "I6", "self-attested", null, now)).toMatchObject({ completed: true });
   });
   it("returns unknown for an item the member does not have", () => {
     const store = openStore(":memory:");
     member(store, "N1", "non-technical");
-    expect(tick(store, config, "N1", "I6", "self-attested", null, now)).toEqual({ status: "unknown" });
+    expect(tick(store, config, "N1", "I5", "self-attested", null, now)).toEqual({ status: "unknown" });
     expect(tick(store, config, "nobody", "I1", "self-attested", null, now)).toEqual({ status: "unknown" });
   });
   it("state survives a restart (Scenario 7)", () => {

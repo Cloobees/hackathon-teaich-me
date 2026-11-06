@@ -88,7 +88,7 @@ describe("message surface: update", () => {
     const args = updates[0]?.args as { channel: string; ts: string; text: string; blocks: unknown[] };
     expect(args.channel).toBe("C-1");
     expect(args.ts).toBe(checklistTs(deps));
-    expect(args.text).toContain("1 of 7");
+    expect(args.text).toContain("1 of 6");
     expect(args.blocks.length).toBeGreaterThan(0);
     expect(JSON.stringify(args.blocks)).toContain("~1. Connect Claude to Slack~");
   });
@@ -102,7 +102,7 @@ describe("message surface: update", () => {
     const posts = deps.fake.of("chat.postMessage");
     expect(posts).toHaveLength(1);
     expect((posts[0]?.args as { channel: string; text: string }).channel).toBe("C-1");
-    expect((posts[0]?.args as { text: string }).text).toContain("1 of 7");
+    expect((posts[0]?.args as { text: string }).text).toContain("1 of 6");
     expect(JSON.stringify(posts[0]?.args)).toContain("~1. Connect Claude to Slack~");
     expect(checklistTs(deps)).toBe("100.001");
     expect(deps.fake.of("pins.add")).toEqual([{ method: "pins.add", args: { channel: "C-1", timestamp: "100.001" } }]);
@@ -174,7 +174,7 @@ describe("message surface: reset", () => {
     expect(args.blocks).toEqual([{ type: "section", text: { type: "mrkdwn", text: args.text } }]);
     expect(checklistTs(deps)).toBe(ts);
     expect(deps.store.get<{ role: string }>("SELECT role FROM member WHERE member_id = 'U1'")?.role).toBe("technical");
-    expect(getRows(deps.store, "U1")).toHaveLength(7);
+    expect(getRows(deps.store, "U1")).toHaveLength(6);
     expect(deps.fake.of("chat.postMessage")).toHaveLength(1);
   });
 
@@ -252,7 +252,7 @@ describe("canvas surface", () => {
       const lines = body(deps);
       expect(lines[0]).toBe(`The glossary canvas: ${GLOSSARY}`);
       expect(lines[1]).toBe("- [ ] Step 1: Connect Claude to Slack");
-      expect(lines).toHaveLength(8);
+      expect(lines).toHaveLength(7);
       expect(lines.slice(1).every((l) => /^- \[ \] Step \d: /.test(l))).toBe(true);
       const posts = deps.fake.of("chat.postMessage");
       expect(posts).toHaveLength(1);
@@ -272,7 +272,7 @@ describe("canvas surface", () => {
       const edits = deps.fake.of("canvases.edit").map((c) => c.args as { changes: Record<string, unknown>[] });
       expect(edits).toHaveLength(2);
       expect(edits.at(-1)?.changes[0]).not.toHaveProperty("section_id");
-      expect(body(deps)).toHaveLength(8);
+      expect(body(deps)).toHaveLength(7);
       expect(body(deps)[1]).toBe("- [ ] Step 1: Connect Claude to Slack");
       expect(deps.fake.of("chat.postMessage")).toHaveLength(1);
       expect(degraded(deps)).toHaveLength(0);
@@ -339,18 +339,18 @@ describe("canvas surface", () => {
     it("Scenario 10: with changed ids only those items are looked up and replaced, one lookup and one edit each, however many are already ticked", async () => {
       const deps = canvasMember();
       await surface.create(deps, "U1", rows(deps));
-      for (const id of ["I1", "I2", "I3", "I4", "I5", "I6"]) tickRow(deps, id);
-      await surface.update(deps, "U1", rows(deps), ["I1", "I2", "I3", "I4", "I5", "I6"]);
+      for (const id of ["I1", "I2", "I3", "I4", "I5"]) tickRow(deps, id);
+      await surface.update(deps, "U1", rows(deps), ["I1", "I2", "I3", "I4", "I5"]);
       const lookups = deps.fake.of("canvases.sections.lookup").length;
       const edits = deps.fake.of("canvases.edit").length;
 
-      tickRow(deps, "I7");
-      await surface.update(deps, "U1", rows(deps), ["I7"]);
+      tickRow(deps, "I6");
+      await surface.update(deps, "U1", rows(deps), ["I6"]);
 
       expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(lookups + 1);
       expect(deps.fake.of("canvases.edit")).toHaveLength(edits + 1);
-      expect(deps.fake.last("canvases.sections.lookup")).toEqual({ canvas_id: "F-1", criteria: { contains_text: label(deps, "I7") } });
-      expect(body(deps).at(-1)).toBe(`- [x] ${label(deps, "I7")}`);
+      expect(deps.fake.last("canvases.sections.lookup")).toEqual({ canvas_id: "F-1", criteria: { contains_text: label(deps, "I6") } });
+      expect(body(deps).at(-1)).toBe(`- [x] ${label(deps, "I6")}`);
     });
 
     it("a tick that changes two items (I3 and I4) looks up and replaces exactly those two", async () => {

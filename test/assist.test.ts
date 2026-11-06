@@ -34,7 +34,7 @@ describe("answer", () => {
     const { client, sent } = fake("Do X. [Connect Claude to Slack]");
     await answer(deps, client, { memberId: "U1", question: "How do I connect Slack?" });
     const user = sent[0]?.user as string;
-    expect(user).toContain("Connect GitHub");
+    expect(user).toContain("Tips for technical members");
     expect(user).not.toContain("Tips for non-technical members");
     expect(user).toContain("How do I connect Slack?");
     expect(sent[0]?.system).toContain("NO_ANSWER");
@@ -82,7 +82,7 @@ describe("answer", () => {
     expect(sent[0]?.system).not.toMatch(BARE_ID);
   });
 
-  it("names a non-technical member's I7 as item 5 (FR-AS-003)", async () => {
+  it("names a non-technical member's I6 as item 5 (FR-AS-003)", async () => {
     const deps = makeDeps();
     await onboard(deps, "U2", "non-technical");
     await tickThrough(deps, "U2", ["I1", "I2", "I3", "I4"]);
@@ -120,7 +120,7 @@ describe("answer", () => {
   it("a member with every item ticked gets the finished line", async () => {
     const deps = makeDeps();
     await onboard(deps, "U2", "non-technical");
-    await tickThrough(deps, "U2", ["I1", "I2", "I3", "I4", "I7"]);
+    await tickThrough(deps, "U2", ["I1", "I2", "I3", "I4", "I6"]);
     const { client, sent } = fake("Do X. [Connect Claude to Slack]");
     const reply = await answer(deps, client, { memberId: "U2", question: "How?" });
     expect(reply.endsWith("You have finished the checklist.")).toBe(true);

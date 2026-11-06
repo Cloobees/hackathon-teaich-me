@@ -29,6 +29,10 @@ export class FakeSlack {
   failOpen = false;
   failList = false;
   failUpload = false;
+  /** How many history reads after an upload come back before the file's message shows (Slack posts it a moment later). */
+  fileLagReads = 0;
+  failHistory = false;
+  private pendingFiles: { channel: string; name: string; reads: number }[] = [];
   failPin = false;
   failBookmark = false;
   failCanvasDelete = false;
@@ -93,6 +97,12 @@ export class FakeSlack {
         const made = this.created.find((c) => c.id === args.channel);
         if (made) made.name = args.name;
         return {};
+      },
+      history: async (args) => {
+        this.calls.push({ method: "conversations.history", args });
+        if (this.failHistory) throw slackError("missing_scope");
+        const shown = this.pendingFiles.filter((f) => f.channel === args.channel && ++f.reads > this.fileLagReads);
+        return { messages: [...shown.map((f) => ({ ts: "100.900", files: [{ name: f.name }] })), { ts: "99.000" }] };
       },
       archive: async (args) => {
         this.calls.push({ method: "conversations.archive", args });
@@ -205,6 +215,7 @@ export class FakeSlack {
       uploadV2: async (args) => {
         this.calls.push({ method: "files.uploadV2", args });
         if (this.failUpload) throw slackError("upload_failed");
+        this.pendingFiles.push({ channel: args.channel_id, name: args.filename, reads: 0 });
         return {};
       },
     },

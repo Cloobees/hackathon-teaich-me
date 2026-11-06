@@ -56,7 +56,6 @@ export async function handleChannelReport(deps: Deps, input: { channel: string; 
     memberEmail: email,
     roleChosenAt: member.role_chosen_at,
     claudeAppId: input.claudeAppId,
-    harnessRepo: deps.harnessRepo,
   });
   if (!result.ok) {
     deps.log("report", { member: owner.member_id, outcome: result.rule, member_email_known: Boolean(email) });

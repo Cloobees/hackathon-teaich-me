@@ -106,7 +106,7 @@ async function startAndChooseRole(deps: D): Promise<void> {
   expect(member(deps)).toMatchObject({ role: "technical", role_chosen_at: deps.clock.now() });
   expect(deps.fake.of("chat.update")[0]?.args).toMatchObject({ channel: CHANNEL, ts: roleTs });
   expect(String((deps.fake.of("chat.update")[0]?.args as { text: string }).text)).toContain("technical");
-  expect(deps.store.all("SELECT * FROM checklist_item WHERE member_id = ?", MEMBER)).toHaveLength(7);
+  expect(deps.store.all("SELECT * FROM checklist_item WHERE member_id = ?", MEMBER)).toHaveLength(6);
 }
 
 /** Everything after the role click, shared by both surfaces. Returns once the member has completed. */
@@ -152,22 +152,21 @@ async function walkChecklist(deps: D): Promise<{ model: ReturnType<typeof model>
   await hear(deps, claude.client, fromClaude(`COPILOT-REPORT v1\nitem: I4\nskill: copilot-check${SENT_USING}`, "200.006"));
   expect(row(deps, "I4")).toEqual({ status: "ticked", method: "validated", evidence_ref: "200.006" });
 
-  // I5, I6, I7 by "I did it".
+  // I5, I6 by "I did it".
   await handleAttest(deps, MEMBER, "I5");
-  await handleAttest(deps, MEMBER, "I6");
   expect(member(deps).completed_at).toBeNull();
-  expect(posts(deps).filter((p) => p.text.startsWith("You have finished onboarding"))).toHaveLength(0);
+  expect(posts(deps).filter((p) => p.text.includes("You have finished onboarding"))).toHaveLength(0);
   deps.clock.advance(60_000);
-  await handleAttest(deps, MEMBER, "I7");
+  await handleAttest(deps, MEMBER, "I6");
 
   // Completion: completed_at set once, one completion message in the channel; a repeat changes nothing.
   const completedAt = member(deps).completed_at;
   expect(completedAt).toBe(deps.clock.now());
-  expect(Object.values(itemStatuses(deps, MEMBER))).toEqual(Array(7).fill("ticked"));
-  const completion = () => inChannel(deps).filter((p) => p.text.startsWith("You have finished onboarding"));
+  expect(Object.values(itemStatuses(deps, MEMBER))).toEqual(Array(6).fill("ticked"));
+  const completion = () => inChannel(deps).filter((p) => p.text.includes("You have finished onboarding"));
   expect(completion()).toHaveLength(1);
   deps.clock.advance(60_000);
-  await handleAttest(deps, MEMBER, "I7");
+  await handleAttest(deps, MEMBER, "I6");
   expect(member(deps).completed_at).toBe(completedAt);
   expect(completion()).toHaveLength(1);
   return { model: claude };
@@ -200,10 +199,10 @@ describe("end to end on the fake clients (BP-107)", () => {
 
     await walkChecklist(deps);
 
-    // The one message was edited in place on every tick (7 ticks), never posted again.
+    // The one message was edited in place on every tick (6 ticks), never posted again.
     const edits = deps.fake.of("chat.update").filter((c) => (c.args as { ts: string }).ts === ts);
-    expect(edits).toHaveLength(7);
-    expect((edits.at(-1)?.args as { text: string }).text).toContain("7 of 7 done");
+    expect(edits).toHaveLength(6);
+    expect((edits.at(-1)?.args as { text: string }).text).toContain("6 of 6 done");
     expect(inChannel(deps).filter((p) => p.text.startsWith("Your onboarding checklist"))).toHaveLength(1);
     expect(member(deps)).toMatchObject({ canvas_surface: null, checklist_canvas_id: null });
     expectOneChannelAndDashboard(deps);
@@ -219,16 +218,16 @@ describe("end to end on the fake clients (BP-107)", () => {
     expect(member(deps)).toMatchObject({ canvas_surface: "canvas", checklist_canvas_id: "F-1", checklist_ts: null });
     expect(inChannel(deps).filter((p) => /Canvas tab/.test(p.text))).toHaveLength(1);
     expect(deps.fake.of("pins.add")).toHaveLength(0);
-    expect(inChannel(deps).filter((p) => /\d of 7 done/.test(p.text))).toHaveLength(0); // no message-surface checklist
+    expect(inChannel(deps).filter((p) => /\d of 6 done/.test(p.text))).toHaveLength(0); // no message-surface checklist
 
     await walkChecklist(deps);
 
-    // Each of the 7 ticks was a lookup then one replace; the app never reads the canvas back; every task line is ticked.
-    expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(7);
-    expect(deps.fake.of("canvases.edit")).toHaveLength(7);
+    // Each of the 6 ticks was a lookup then one replace; the app never reads the canvas back; every task line is ticked.
+    expect(deps.fake.of("canvases.sections.lookup")).toHaveLength(6);
+    expect(deps.fake.of("canvases.edit")).toHaveLength(6);
     expect(deps.fake.calls.filter((c) => /getContent/.test(c.method))).toHaveLength(0);
     const lines = deps.fake.canvasBodies["F-1"]?.split("\n").filter((l) => l.startsWith("- [")) ?? [];
-    expect(lines).toHaveLength(7);
+    expect(lines).toHaveLength(6);
     expect(lines.every((l) => l.startsWith("- [x]"))).toBe(true);
     expect(deps.fake.of("chat.update")).toHaveLength(1); // only the role question
     expectOneChannelAndDashboard(deps);
@@ -274,6 +273,6 @@ describe("end to end on the fake clients (BP-107)", () => {
     // The member chooses a role again, in the new channel.
     await handleRole(deps, { memberId: MEMBER, role: "technical", channel: NEW, messageTs: "100.099" });
     expect(member(deps).role).toBe("technical");
-    expect(deps.store.all("SELECT * FROM checklist_item WHERE member_id = ?", MEMBER)).toHaveLength(7);
+    expect(deps.store.all("SELECT * FROM checklist_item WHERE member_id = ?", MEMBER)).toHaveLength(6);
   });
 });

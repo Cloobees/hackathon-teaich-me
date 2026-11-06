@@ -1,7 +1,7 @@
 ---
 title: Join the help channel
 roles: all
-item: I7
+item: I6
 action: |
   1. In Slack, join *int-sf-ai*.
   2. Click *I did it*.

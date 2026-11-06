@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +23,7 @@ const actionIds = (call: Call | undefined) => buttons(call).map((b) => b.action_
 const body = (call: Call | undefined) => `${call?.args.text} ${JSON.stringify(call?.args.blocks)}`;
 /** The lines of the instruction message text, as a member reads them. */
 const linesOf = (call: Call | undefined) => String(call?.args.text).split("\n");
-const ACTION = "*Do this:* ";
+const ACTION = "*Do this:*\n";
 const CHECK = "*I check:* ";
 const CONFIRM = "*You confirm:* I cannot check this step, so click *I did it* when you have done it.";
 const copyFixture = () => {
@@ -98,24 +98,24 @@ describe("instruction message", () => {
     expect(actionIds(next)).toEqual(["attest_I1"]);
   });
 
-  it("every instruction message carries the one I did it button and no check button, on I2, I4 and I6 too (FR-VF-001)", async () => {
+  it("every instruction message carries the one I did it button and no check button, on I2, I4 and I5 too (FR-VF-001)", async () => {
     const deps = makeDeps();
     await onboard(deps, "U1", "technical");
     const seen: Record<string, string[]> = {};
-    for (const id of ["I1", "I2", "I3", "I4", "I5"]) {
+    for (const id of ["I1", "I2", "I3", "I4"]) {
       await applyTick(deps, "U1", id, "self-attested", null);
       const ids = actionIds(deps.fake.of("chat.postMessage").at(-1));
       seen[(ids[0] as string).slice("attest_".length)] = ids;
     }
-    expect(seen).toEqual({ I2: ["attest_I2"], I3: ["attest_I3"], I4: ["attest_I4"], I5: ["attest_I5"], I6: ["attest_I6"] });
+    expect(seen).toEqual({ I2: ["attest_I2"], I3: ["attest_I3"], I4: ["attest_I4"], I5: ["attest_I5"] });
   });
 
   it("an item with no library file still gets a button and says so", async () => {
     const deps = makeDeps();
     await onboard(deps, "U1", "technical");
-    for (const id of ["I1", "I2", "I3", "I4", "I5"]) await applyTick(deps, "U1", id, "self-attested", null);
+    for (const id of ["I1", "I2", "I3", "I4"]) await applyTick(deps, "U1", id, "self-attested", null);
     const next = deps.fake.of("chat.postMessage").at(-1);
-    expect(body(next)).toContain("6. Connect Atlassian");
+    expect(body(next)).toContain("5. Connect Atlassian");
     expect(body(next)).toContain("No instruction is in the library for this step yet.");
   });
 
@@ -125,10 +125,12 @@ describe("instruction message", () => {
     for (const id of ["I1", "I2", "I3", "I4"]) await applyTick(deps, "N1", id, "self-attested", null);
     const instructionsBefore = instructions(deps).length;
     const posts = deps.fake.of("chat.postMessage").length;
-    await applyTick(deps, "N1", "I7", "self-attested", null);
+    await applyTick(deps, "N1", "I6", "self-attested", null);
 
     expect(deps.fake.of("chat.postMessage")).toHaveLength(posts + 1);
     expect(String(deps.fake.last("chat.postMessage").text)).toContain("finished onboarding");
+    // The last step has no next instruction to carry the Done line, so the completion message opens with it.
+    expect(String(deps.fake.last("chat.postMessage").text).split("\n")[0]).toBe(":white_check_mark: Done: *5. Join the int-sf-ai channel*.");
     expect(instructions(deps)).toHaveLength(instructionsBefore);
   });
 
@@ -249,8 +251,8 @@ describe("instruction placeholders and the stored channel id (FR-CL-013, FR-CH-0
 
 describe("instruction action and check lines (FR-CL-013, Scenario 13)", () => {
   const ROLE_ITEMS: [Role, string[]][] = [
-    ["non-technical", ["I1", "I2", "I3", "I4", "I7"]],
-    ["technical", ["I1", "I2", "I3", "I4", "I5", "I6", "I7"]],
+    ["non-technical", ["I1", "I2", "I3", "I4", "I6"]],
+    ["technical", ["I1", "I2", "I3", "I4", "I5", "I6"]],
   ];
 
   it("for every item of each role the message holds the file's action line and its check line, or a confirm line, and not the body", async () => {
@@ -261,7 +263,7 @@ describe("instruction action and check lines (FR-CL-013, Scenario 13)", () => {
       for (const id of ids) {
         const file = library.find((f) => f.item === id);
         if (!file) {
-          // The fixture library has no I6 file, so there are no lines to read.
+          // The fixture library has no I5 file, so there are no lines to read.
           expect(body(deps.fake.of("chat.postMessage").at(-1))).toContain("No instruction is in the library for this step yet.");
           await applyTick(deps, "U1", id, "self-attested", null);
           continue;
@@ -302,9 +304,10 @@ Body.`,
     await onboard(deps, "U1", "non-technical");
     await applyTick(deps, "U1", "I1", "self-attested", null);
     const lines = linesOf(deps.fake.of("chat.postMessage").at(-1));
-    expect(lines).toContain(`${ACTION}${i2?.check}`);
+    expect(lines).toContain("*Do this:*");
+    expect(lines[lines.indexOf("*Do this:*") + 1]).toBe(i2?.check);
     expect(lines).toContain(`${CHECK}${i2?.action}`);
-    expect(lines.indexOf(`${ACTION}${i2?.check}`)).toBeLessThan(lines.indexOf(`${CHECK}${i2?.action}`));
+    expect(lines.indexOf("*Do this:*")).toBeLessThan(lines.indexOf(`${CHECK}${i2?.action}`));
   });
 
   it("an item file with no action falls back to its body, so a library without the keys still works", async () => {
@@ -419,5 +422,106 @@ describe("channel reference in the real library (FR-CH-013)", () => {
       expect(text).not.toMatch(/C0BOUND01[\s,(]*channel ID/i);
       expect(text).not.toContain("{channelName}");
     }
+  });
+});
+
+describe("an image in an instruction ({image:name.png})", () => {
+  const FIRST_STEP = `---
+title: Connect Claude to Slack
+roles: all
+item: I1
+action: |
+  1. Open Settings.
+  2. Make sure the connector is activated.
+  {image:shot.png}
+  3. Ask your Claude to post in {channelName}.
+check: I tick this when I see Claude's message.
+---
+Body.`;
+
+  /** A member with a library whose I1 file holds the image line, and an assets folder with (or without) the picture. */
+  async function withImage(opts: { picture: boolean; failUpload?: boolean; lag?: number; failHistory?: boolean }) {
+    const waits: number[] = [];
+    const root = mkdtempSync(join(tmpdir(), "img-"));
+    const libraryDir = join(root, "library");
+    const assetsDir = join(root, "assets");
+    cpSync(FIXTURE_LIBRARY, libraryDir, { recursive: true });
+    writeFileSync(join(libraryDir, "i1.md"), FIRST_STEP);
+    mkdirSync(assetsDir);
+    if (opts.picture) writeFileSync(join(assetsDir, "shot.png"), Buffer.from([137, 80, 78, 71]));
+    const deps = makeDeps({ libraryDir, assetsDir, sleep: async (ms) => void waits.push(ms) });
+    deps.fake.failUpload = Boolean(opts.failUpload);
+    deps.fake.fileLagReads = opts.lag ?? 0;
+    deps.fake.failHistory = Boolean(opts.failHistory);
+    await onboard(deps, "U1", "non-technical");
+    return Object.assign(deps, { waits });
+  }
+
+  it("posts the text above the line with the image under it, then the text below with the button", async () => {
+    const deps = await withImage({ picture: true });
+    const uploads = deps.fake.of("files.uploadV2");
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]?.args).toMatchObject({ filename: "shot.png" });
+    const comment = String(uploads[0]?.args.initial_comment);
+    expect(comment).toContain("1. Connect Claude to Slack");
+    expect(comment).toContain("1. Open Settings.\n2. Make sure the connector is activated.");
+    expect(comment).not.toContain("3. Ask your Claude");
+    expect(comment).not.toContain("{image:");
+
+    const message = instructions(deps).at(-1);
+    expect(actionIds(message)).toEqual(["attest_I1"]);
+    expect(body(message)).toContain("3. Ask your Claude to post in");
+    expect(body(message)).toContain("*I check:* I tick this when I see Claude's message.");
+    expect(body(message)).not.toContain("1. Open Settings.");
+    expect(body(message)).not.toContain("{image:");
+    // The upload comes first, so the image sits above the message with the button.
+    const order = deps.fake.calls.map((c) => c.method).filter((m) => m === "files.uploadV2" || m === "chat.postMessage");
+    expect(order.lastIndexOf("files.uploadV2")).toBeLessThan(order.lastIndexOf("chat.postMessage"));
+  });
+
+  it("waits until the channel shows the file's post before sending the rest, so the image stays above it", async () => {
+    const deps = await withImage({ picture: true, lag: 3 });
+    // Three reads came back without the file; the fourth showed it. Each miss waited half a second.
+    expect(deps.waits).toEqual([500, 500, 500]);
+    const methods = deps.fake.calls.map((c) => c.method);
+    const upload = methods.lastIndexOf("files.uploadV2");
+    const lastRead = methods.lastIndexOf("conversations.history");
+    const instruction = methods.lastIndexOf("chat.postMessage");
+    expect(upload).toBeLessThan(lastRead);
+    expect(lastRead).toBeLessThan(instruction);
+    expect(deps.fake.calls.filter((c, i) => c.method === "conversations.history" && i > upload)).toHaveLength(4);
+    expect(actionIds(instructions(deps).at(-1))).toEqual(["attest_I1"]);
+  });
+
+  it("when the history cannot be read, waits a fixed 2 seconds and still posts the rest", async () => {
+    const deps = await withImage({ picture: true, failHistory: true });
+    expect(deps.waits).toEqual([2000]);
+    expect(deps.fake.of("files.uploadV2")).toHaveLength(1);
+    expect(body(instructions(deps).at(-1))).toContain("3. Ask your Claude to post in");
+  });
+
+  it("with the picture missing, posts one whole message without the image line and logs it", async () => {
+    const deps = await withImage({ picture: false });
+    expect(deps.fake.of("files.uploadV2")).toHaveLength(0);
+    const message = instructions(deps).at(-1);
+    expect(body(message)).toContain("1. Open Settings.");
+    expect(body(message)).toContain("3. Ask your Claude to post in");
+    expect(body(message)).not.toContain("{image:");
+    expect(deps.logs.some((l) => l.includes("instruction_image_failed"))).toBe(true);
+  });
+
+  it("with the upload failing, posts one whole message without the image line", async () => {
+    const deps = await withImage({ picture: true, failUpload: true });
+    const message = instructions(deps).at(-1);
+    expect(body(message)).toContain("1. Open Settings.");
+    expect(body(message)).not.toContain("{image:");
+    expect(actionIds(message)).toEqual(["attest_I1"]);
+    expect(deps.logs.some((l) => l.includes("instruction_image_failed"))).toBe(true);
+  });
+
+  it("an instruction without an image line never uploads anything", async () => {
+    const deps = makeDeps();
+    await onboard(deps, "U1", "technical");
+    expect(deps.fake.of("files.uploadV2")).toHaveLength(0);
   });
 });

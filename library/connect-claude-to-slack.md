@@ -3,8 +3,10 @@ title: Connect Claude to Slack
 roles: all
 item: I1
 action: |
-  1. In Claude: *Settings* > *Connectors* > *Slack* > *Connect*.
-  2. Ask your Claude:
+  1. In Claude, in the bottom-left corner click on your username and go to *Settings* :gear: > *Connectors* > *Slack* > *Connect*.
+  2. In the chat window, make sure the connector is activated.
+  {image:active_connectors.png}
+  3. Ask your Claude:
      ```
      Using your Slack connector, post a short welcome message to the private Slack channel with ID {channelName}. I am already a member of that channel. Use the channel ID, not a name search.
      ```

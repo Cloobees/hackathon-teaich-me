@@ -24,29 +24,3 @@ describe("loadCopilotConfig", () => {
     expect(loadCopilotConfig({ ...full, BOT_MENTION: "Copilot Dev" }).botMention).toBe("Copilot Dev");
   });
 });
-
-describe("HARNESS_REPO", () => {
-  it("is optional, with no default, and is read trimmed when set", () => {
-    expect(loadCopilotConfig(full).harnessRepo).toBeUndefined();
-    expect(loadCopilotConfig({ ...full, HARNESS_REPO: "" }).harnessRepo).toBeUndefined();
-    expect(loadCopilotConfig({ ...full, HARNESS_REPO: " synechron/harness " }).harnessRepo).toBe("synechron/harness");
-  });
-});
-
-describe("CHECKLIST_SURFACE", () => {
-  it("defaults to message", () => {
-    expect(loadCopilotConfig(full).checklistSurface).toBe("message");
-    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: "" }).checklistSurface).toBe("message");
-  });
-  it("accepts canvas and message, trimmed and in any case", () => {
-    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: "canvas" }).checklistSurface).toBe("canvas");
-    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: " Canvas " }).checklistSurface).toBe("canvas");
-    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: "message" }).checklistSurface).toBe("message");
-    expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: " Both " }).checklistSurface).toBe("both");
-  });
-  it("falls back to message for any other value, without throwing", () => {
-    for (const value of ["lists", "canvases", "1", "true"]) {
-      expect(loadCopilotConfig({ ...full, CHECKLIST_SURFACE: value }).checklistSurface).toBe("message");
-    }
-  });
-});

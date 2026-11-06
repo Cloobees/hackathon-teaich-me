@@ -52,8 +52,8 @@ skill: copilot-check *Sent using* <@U0CDESX6B0V>`;
   it("version: v2 fails", () => {
     expect(validateReport(block({ item: "I2" }, { version: 2 }), ctx)).toMatchObject({ ok: false, rule: "version" });
   });
-  it("item: I1, I7 and unknown items fail", () => {
-    for (const item of ["I1", "I7", "I9", "x"]) {
+  it("item: I1, I6 and unknown items fail", () => {
+    for (const item of ["I1", "I6", "I9", "x"]) {
       expect(validateReport(block({ item }), ctx)).toMatchObject({ ok: false, rule: "item" });
     }
   });
@@ -64,11 +64,10 @@ skill: copilot-check *Sent using* <@U0CDESX6B0V>`;
       validateReport("hello", ctx),
       validateReport(i2().replace(MARK, ""), ctx),
       validateReport(block({ item: "I2" }, { version: 2 }), ctx),
-      validateReport(block({ item: "I7" }), ctx),
+      validateReport(block({ item: "I6" }), ctx),
       validateReport(i2({ last_activity: "null" }), ctx),
       validateReport(block({ item: "I3" }), ctx),
-      validateReport(block({ item: "I5" }), ctx),
-      validateReport(block({ item: "I6", site_count: "0" }), ctx),
+      validateReport(block({ item: "I5", site_count: "0" }), ctx),
     ].map((r) => (r as { message: string }).message);
     for (const message of messages) expect(message).not.toMatch(/check button|get report prompt|paste/i);
     expect(messages[2]).toMatch(/post the block again, unchanged/i);
@@ -91,17 +90,12 @@ skill: copilot-check *Sent using* <@U0CDESX6B0V>`;
     expect(validateReport(block({ item: "I4", skill: "something-else" }), ctx)).toMatchObject({ rule: "i4-skill" });
     expect(validateReport(block({ item: "I4", skill: "copilot-check" }), ctx)).toEqual({ ok: true, item: "I4" });
   });
-  it("I5 repo must be present and not empty (Scenario 15)", () => {
-    expect(validateReport(block({ item: "I5" }), ctx)).toMatchObject({ ok: false, rule: "i5-repo" });
-    expect(validateReport(block({ item: "I5", repo: "" }), ctx)).toMatchObject({ ok: false, rule: "i5-repo" });
-    expect(validateReport(block({ item: "I5", repo: "synechron/harness" }), ctx)).toEqual({ ok: true, item: "I5" });
-  });
-  it("I6 site_count must be a whole number of 1 or more, and a good block passes", () => {
-    expect(validateReport(block({ item: "I6", site_count: "0" }), ctx)).toMatchObject({ rule: "i6-sites" });
-    expect(validateReport(block({ item: "I6", site_count: "abc" }), ctx)).toMatchObject({ rule: "i6-sites" });
-    expect(validateReport(block({ item: "I6", site_count: "-1" }), ctx)).toMatchObject({ rule: "i6-sites" });
-    expect(validateReport(block({ item: "I6" }), ctx)).toMatchObject({ rule: "i6-sites" });
-    expect(validateReport(block({ item: "I6", site_count: "2" }), ctx)).toEqual({ ok: true, item: "I6" });
+  it("I5 site_count must be a whole number of 1 or more, and a good block passes", () => {
+    expect(validateReport(block({ item: "I5", site_count: "0" }), ctx)).toMatchObject({ rule: "i5-sites" });
+    expect(validateReport(block({ item: "I5", site_count: "abc" }), ctx)).toMatchObject({ rule: "i5-sites" });
+    expect(validateReport(block({ item: "I5", site_count: "-1" }), ctx)).toMatchObject({ rule: "i5-sites" });
+    expect(validateReport(block({ item: "I5" }), ctx)).toMatchObject({ rule: "i5-sites" });
+    expect(validateReport(block({ item: "I5", site_count: "2" }), ctx)).toEqual({ ok: true, item: "I5" });
   });
   it("is stateless: the same valid block validates twice (a repeat is the tick's job, Scenario 4)", () => {
     expect(validateReport(i2(), ctx).ok).toBe(true);
@@ -127,29 +121,6 @@ skill: copilot-check${mark}`;
   });
   it("the real id passes", () => {
     expect(validateReport(i4(MARK), ctx)).toEqual({ ok: true, item: "I4" });
-  });
-});
-
-describe("I5 repo against HARNESS_REPO (Scenario 15, data contract harness_repo)", () => {
-  const i5 = (repo: string) => block({ item: "I5", repo });
-
-  it("when set, a different repo fails with the i5-repo rule and the same repo passes", () => {
-    const set = { ...ctx, harnessRepo: "synechron/harness" };
-    expect(validateReport(i5("other/repo"), set)).toMatchObject({ ok: false, rule: "i5-repo" });
-    expect(validateReport(i5("synechron/harness"), set)).toEqual({ ok: true, item: "I5" });
-  });
-  it("the comparison trims and ignores case, on both sides", () => {
-    expect(validateReport(i5("  Synechron/Harness "), { ...ctx, harnessRepo: "synechron/harness" }).ok).toBe(true);
-    expect(validateReport(i5("synechron/harness"), { ...ctx, harnessRepo: " Synechron/Harness  " }).ok).toBe(true);
-  });
-  it("when set, an empty repo still fails", () => {
-    expect(validateReport(block({ item: "I5", repo: "" }), { ...ctx, harnessRepo: "synechron/harness" })).toMatchObject({ rule: "i5-repo" });
-  });
-  it("when unset, or blank, any non-empty repo passes and an empty one fails", () => {
-    for (const harnessRepo of [undefined, "", "  "]) {
-      expect(validateReport(i5("any/thing"), { ...ctx, harnessRepo })).toEqual({ ok: true, item: "I5" });
-      expect(validateReport(block({ item: "I5", repo: "" }), { ...ctx, harnessRepo })).toMatchObject({ rule: "i5-repo" });
-    }
   });
 });
 

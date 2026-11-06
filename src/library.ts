@@ -99,13 +99,18 @@ export function checkLibrary(dir: string): string[] {
     if (!lines.some((l) => l.startsWith("technical:"))) problems.push("role-definitions: no line starting 'technical:'");
     if (!lines.some((l) => l.startsWith("non-technical:"))) problems.push("role-definitions: no line starting 'non-technical:'");
   }
-  for (const id of ["I1", "I2", "I3", "I4", "I7"]) {
+  for (const id of ["I1", "I2", "I3", "I4", "I6"]) {
     if (!files.some((f) => f.item === id && f.roles.includes("all"))) problems.push(`missing required file: item ${id} for all roles`);
   }
-  for (const id of ["I5", "I6"]) {
+  for (const id of ["I5"]) {
     if (!files.some((f) => f.item === id && f.roles.includes("technical"))) problems.push(`missing required file: item ${id} for technical`);
   }
-  for (const f of files) if (f.item && /^I[1-7]$/.test(f.item)) problems.push(...itemShapeProblems(f, f.item));
+  for (const f of files) if (f.item && /^I[1-6]$/.test(f.item)) problems.push(...itemShapeProblems(f, f.item));
+  // An instruction can show an image from assets/, beside the library folder (`{image:name.png}`).
+  for (const f of files) {
+    const image = /\{image:\s*([\w.-]+)\s*\}/.exec(f.action ?? "")?.[1];
+    if (image && !existsSync(join(dir, "..", "assets", image))) problems.push(`${f.file}: item ${f.item} action shows image ${image}, which is not in assets/`);
+  }
   return problems;
 }
 
@@ -126,7 +131,7 @@ function itemShapeProblems(f: LibraryFile, id: string): string[] {
   const has = (text: string) => action.includes(text);
   const reportLine = /^\s*item:\s*(\S+)\s*$/m.exec(action)?.[1];
   const hasReport = /COPILOT-REPORT v1/.test(action);
-  if (id !== "I7" && !has("{channelName}")) problems.push(`${f.file}: item ${id} action has no {channelName}`);
+  if (id !== "I6" && !has("{channelName}")) problems.push(`${f.file}: item ${id} action has no {channelName}`);
   // I1 names the existing channel by id (FR-CH-013): no create-channel step, no /invite step, no bot mention.
   if (id === "I1") {
     for (const bad of ["{botMention}", "/invite"]) {
@@ -134,10 +139,10 @@ function itemShapeProblems(f: LibraryFile, id: string): string[] {
     }
     if (/create\s+(a\s+)?(private\s+)?(slack\s+)?channel/i.test(action)) problems.push(`${f.file}: item ${id} action must not create a channel`);
   }
-  if (id !== "I1" && id !== "I7" && !(hasReport && reportLine === id)) {
+  if (id !== "I1" && id !== "I6" && !(hasReport && reportLine === id)) {
     problems.push(`${f.file}: item ${id} action has no COPILOT-REPORT v1 block with 'item: ${id}'`);
   }
-  if (id === "I7") {
+  if (id === "I6") {
     for (const bad of ["{channelName}", "{botMention}", "COPILOT-REPORT"]) {
       if (has(bad)) problems.push(`${f.file}: item ${id} action must not hold ${bad}`);
     }

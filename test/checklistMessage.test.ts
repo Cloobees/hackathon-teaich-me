@@ -26,7 +26,7 @@ describe("checklist message", () => {
 
     expect(deps.fake.of("chat.update")).toHaveLength(updates + 1);
     const update = deps.fake.last("chat.update");
-    expect(update.text).toContain("1 of 7");
+    expect(update.text).toContain("1 of 6");
     expect(update.blocks?.length).toBeGreaterThan(0);
     expect(text(update.blocks)).toContain("~1. Connect Claude to Slack~");
     expect(text(update.blocks)).toMatch(/Next:\* \*2\. Connect Claude to Context Builder/);
@@ -42,7 +42,7 @@ describe("checklist message", () => {
 
     expect(checklist.blocks[0]?.accessory).toMatchObject({ type: "button", url: "https://example.slack.com/canvas/F1", action_id: "open_glossary" });
     const lines = checklist.blocks.map((b) => b.text?.text ?? "");
-    const titles = ["Connect Claude to Slack", "Connect Claude to Context Builder", "Set up a Claude Project", "Add a skill to the Project and use it", "Connect GitHub (harness repo)", "Connect Atlassian", "Join the int-sf-ai channel"];
+    const titles = ["Connect Claude to Slack", "Connect Claude to Context Builder", "Set up a Claude Project", "Add a skill to the Project and use it", "Connect Atlassian", "Join the int-sf-ai channel"];
     titles.forEach((title, i) => expect(lines.some((l) => l.includes(`${i + 1}. ${title}`))).toBe(true));
     expect(JSON.stringify(checklist.blocks)).toContain(deps.items.help);
     expect(checklist.blocks.some((b) => b.type === "actions")).toBe(false);
@@ -121,7 +121,7 @@ describe("checklist message", () => {
     const deps = makeDeps();
     await onboard(deps, "N1", "non-technical");
     await applyTick(deps, "N1", "I4", "self-attested", null); // refused: I3 is unticked
-    for (const id of ["I1", "I2", "I3", "I4", "I7"]) await applyTick(deps, "N1", id, "self-attested", null);
+    for (const id of ["I1", "I2", "I3", "I4", "I6"]) await applyTick(deps, "N1", id, "self-attested", null);
 
     const channels = deps.fake.of("chat.postMessage").map((c) => c.args.channel);
     // The link DM from the start is the only DM post.
@@ -181,7 +181,7 @@ describe("checklist message", () => {
   it("completion sends one message naming the glossary and the help contact, and a duplicate sends none (Scenario 6)", async () => {
     const deps = makeDeps({ glossaryUrl: "https://example.slack.com/canvas/F1" });
     await onboard(deps, "N1", "non-technical");
-    for (const id of ["I1", "I2", "I3", "I4", "I7"]) await applyTick(deps, "N1", id, "self-attested", null);
+    for (const id of ["I1", "I2", "I3", "I4", "I6"]) await applyTick(deps, "N1", id, "self-attested", null);
     const done = deps.fake.of("chat.postMessage").filter((c) => String(c.args.text).includes("finished onboarding"));
     expect(done).toHaveLength(1);
     expect(done[0]?.args.text).toContain("glossary");
@@ -190,7 +190,7 @@ describe("checklist message", () => {
     expect(done[0]?.args.text).toContain("int-sf-ai");
     expect(done[0]?.args.text).not.toMatch(/stuck/i);
 
-    await applyTick(deps, "N1", "I7", "self-attested", null);
+    await applyTick(deps, "N1", "I6", "self-attested", null);
     expect(deps.fake.of("chat.postMessage").filter((c) => String(c.args.text).includes("finished onboarding"))).toHaveLength(1);
   });
 
@@ -209,8 +209,8 @@ describe("checklist message", () => {
   });
 
   it.each([
-    ["technical", ["I1", "I2", "I3", "I4", "I5", "I6", "I7"]],
-    ["non-technical", ["I1", "I2", "I3", "I4", "I7"]],
+    ["technical", ["I1", "I2", "I3", "I4", "I5", "I6"]],
+    ["non-technical", ["I1", "I2", "I3", "I4", "I6"]],
   ] as const)("a full %s run leaves no item id in any message or block text (Scenario 12)", async (role, ids) => {
     const deps = makeDeps({ glossaryUrl: "https://example.slack.com/canvas/F1" });
     await onboard(deps, "U1", role);
@@ -294,7 +294,7 @@ describe("a Slack error after the tick write is isolated (BP-098 review findings
     deps.slack.chat.update = async () => {
       throw slackError("ratelimited");
     };
-    await expect(applyTick(deps, "U1", "I7", "self-attested", null)).resolves.toMatchObject({ status: "ticked", completed: true });
+    await expect(applyTick(deps, "U1", "I6", "self-attested", null)).resolves.toMatchObject({ status: "ticked", completed: true });
 
     expect(deps.store.get<{ completed_at: string | null }>("SELECT completed_at FROM member WHERE member_id = 'U1'")?.completed_at).not.toBeNull();
     expect(posts(deps).filter((t) => t.includes("finished onboarding"))).toHaveLength(1);
@@ -307,7 +307,7 @@ describe("a Slack error after the tick write is isolated (BP-098 review findings
     deps.slack.chat.postMessage = async () => {
       throw slackError("ratelimited");
     };
-    await expect(applyTick(deps, "U1", "I7", "self-attested", null)).resolves.toMatchObject({ completed: true });
+    await expect(applyTick(deps, "U1", "I6", "self-attested", null)).resolves.toMatchObject({ completed: true });
     expect(deps.store.get<{ completed_at: string | null }>("SELECT completed_at FROM member WHERE member_id = 'U1'")?.completed_at).not.toBeNull();
     expect(deps.logs.some((l) => l.includes("channel_post_failed") && l.includes("completion"))).toBe(true);
   });
@@ -377,7 +377,7 @@ describe("a Slack error after the tick write is isolated (BP-098 review findings
     };
     await expect(createChecklist(deps, "U1", "technical")).resolves.toBeUndefined();
 
-    expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id = 'U1'")).toHaveLength(7);
+    expect(deps.store.all("SELECT 1 FROM checklist_item WHERE member_id = 'U1'")).toHaveLength(6);
     expect(deps.store.get<{ checklist_ts: string | null }>("SELECT checklist_ts FROM member WHERE member_id = 'U1'")?.checklist_ts).toBeNull();
     expect(posts(deps).at(-1)).toContain("1. Connect Claude to Slack");
     expect(deps.logs.some((l) => l.includes("checklist_failed") && l.includes("surface_create"))).toBe(true);
@@ -399,7 +399,7 @@ describe("a Slack error after the tick write is isolated (BP-098 review findings
     await createChecklist(deps, "U1", "technical");
     await applyTick(deps, "U1", "I1", "observed", null);
 
-    const checklist = deps.fake.of("chat.postMessage").find((c) => String(c.args.text).includes("onboarding checklist: 1 of 7"));
+    const checklist = deps.fake.of("chat.postMessage").find((c) => String(c.args.text).includes("onboarding checklist: 1 of 6"));
     expect(checklist).toBeDefined();
     expect(deps.fake.of("pins.add")).toHaveLength(1);
     expect(deps.store.get<{ checklist_ts: string | null }>("SELECT checklist_ts FROM member WHERE member_id = 'U1'")?.checklist_ts).not.toBeNull();

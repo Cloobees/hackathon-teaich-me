@@ -16,10 +16,12 @@ export interface Deps {
   glossaryUrl?: string;
   /** Path of the copilot-check zip the copilot attaches (SKILL_ZIP_PATH); sendSkillZip treats an unset path as a missing file. */
   skillZipPath?: string;
+  /** Folder of the images an instruction can show (ASSETS_DIR); defaults to `assets`. */
+  assetsDir?: string;
+  /** Waits `ms` milliseconds; tests pass an instant one. Defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
   /** What the member types after /invite (BOT_MENTION); `{botMention}` in an instruction is replaced by it. */
   botMention?: string;
-  /** `owner/name` the I5 report must name (HARNESS_REPO); unset accepts any non-empty repo. */
-  harnessRepo?: string;
   /** Surface for a member whose `canvas_surface` is unset (CHECKLIST_SURFACE); unset means `message`. */
   checklistSurface?: "canvas" | "message" | "both";
   /** The link to a canvas in this workspace, from `auth.test`; undefined until the app has started. */

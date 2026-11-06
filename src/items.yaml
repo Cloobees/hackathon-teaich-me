@@ -4,7 +4,7 @@
 
 help: "Questions? Ask in the {helpChannel} channel."
 
-# The channel named by I7, the help line and the completion message. Item names and `help` may use `{helpChannel}`.
+# The channel named by I6, the help line and the completion message. Item names and `help` may use `{helpChannel}`.
 helpChannel: int-sf-ai
 
 items:
@@ -12,6 +12,5 @@ items:
   - { id: I2, name: Connect Claude to Context Builder, roles: all, order: 2 }
   - { id: I3, name: Set up a Claude Project, roles: all, order: 3 }
   - { id: I4, name: Add a skill to the Project and use it, roles: all, order: 4, needs: I3 }
-  - { id: I5, name: Connect GitHub (harness repo), roles: technical, order: 5 }
-  - { id: I6, name: Connect Atlassian, roles: technical, order: 6 }
-  - { id: I7, name: "Join the {helpChannel} channel", roles: all, order: 7 }
+  - { id: I5, name: Connect Atlassian, roles: technical, order: 5 }
+  - { id: I6, name: "Join the {helpChannel} channel", roles: all, order: 6 }

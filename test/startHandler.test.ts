@@ -411,7 +411,7 @@ describe("a lost channel is replaced and the member's progress follows (FR-CH-02
     expect(JSON.stringify(fresh)).not.toContain("role_technical");
     expect(JSON.stringify(fresh)).not.toContain("Which describes you better");
     const checklist = inNew.find((p) => p.text.includes("onboarding checklist"));
-    expect(checklist?.text).toContain("2 of 7");
+    expect(checklist?.text).toContain("2 of 6");
     expect(JSON.stringify(checklist)).toContain("~1. Connect Claude to Slack~");
     expect(JSON.stringify(checklist)).toContain("~2. Connect Claude to Context Builder~");
     expect(inNew.at(-1)?.text).toContain("*3. Set up a Claude Project*");
@@ -457,7 +457,7 @@ describe("a lost channel is replaced and the member's progress follows (FR-CH-02
   it("a completed member whose channel is replaced sees the checklist and no instruction", async () => {
     const deps = makeDeps();
     await onboard(deps, "N1", "non-technical");
-    for (const id of ["I1", "I2", "I3", "I4", "I7"]) await applyTick(deps, "N1", id, "self-attested", null);
+    for (const id of ["I1", "I2", "I3", "I4", "I6"]) await applyTick(deps, "N1", id, "self-attested", null);
     setMemberChannel(deps.store, "N1", { id: "C-1", name: "onboarding-copilot-n1", state: "lost" });
     await startOnboarding(deps, { memberId: "N1", startedBy: "command" });
     const inNew = inChannel(deps, "C-2");
@@ -499,7 +499,7 @@ describe("a lost channel is replaced and the member's progress follows (FR-CH-02
     expect(JSON.stringify(fresh)).not.toContain("Which describes you better");
     const inNew = inChannel(deps, "C-2");
     expect(inNew).toHaveLength(2);
-    expect(inNew[0]?.text).toContain("2 of 7");
+    expect(inNew[0]?.text).toContain("2 of 6");
     expect(JSON.stringify(inNew[0])).toContain("~2. Connect Claude to Context Builder~");
     expect(inNew[1]?.text).toContain("*3. Set up a Claude Project*");
     expect(dmPosts(deps)).toHaveLength(dmsBefore + 1);
@@ -517,7 +517,7 @@ describe("a lost channel is replaced and the member's progress follows (FR-CH-02
     expect(await startOnboarding(deps, { memberId: "U1", startedBy: "command" })).toBe("existing");
     const fresh = allPosts(deps).slice(before);
     expect(fresh.filter((p) => p.text.includes("onboarding checklist"))).toHaveLength(1);
-    expect(fresh.find((p) => p.text.includes("onboarding checklist"))?.text).toContain("1 of 7");
+    expect(fresh.find((p) => p.text.includes("onboarding checklist"))?.text).toContain("1 of 6");
     expect(fresh.at(-1)?.text).toContain("*2. Connect Claude to Context Builder*");
     expect(JSON.stringify(fresh)).not.toContain("role_technical");
     expect(dmPosts(deps).filter((p) => p.text.includes("<#C-1>"))).toHaveLength(1);
@@ -598,7 +598,7 @@ describe("the start flow posts are isolated (BP-098 review finding 3)", () => {
     };
     await handleRole(deps, { memberId: "U1", role: "technical", channel: "C-1", messageTs: "100.001" });
     expect(row(deps, "U1")).toMatchObject({ role: "technical" });
-    expect(Object.keys(itemStatuses(deps, "U1"))).toHaveLength(7);
+    expect(Object.keys(itemStatuses(deps, "U1"))).toHaveLength(6);
     expect(posts(deps).some((p) => p.text.includes("onboarding checklist"))).toBe(true);
   });
 });

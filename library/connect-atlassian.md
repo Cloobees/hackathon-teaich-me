@@ -1,14 +1,14 @@
 ---
 title: Connect Atlassian
 roles: technical
-item: I6
+item: I5
 action: |
   1. In Claude: *Settings* > *Connectors* > *Atlassian* > *Connect*. Sign in and approve the site.
   2. In a chat with Atlassian on, ask your Claude:
      ```
      Using your Atlassian connector, list the Atlassian sites I can reach and count them. Fill in this block:
      COPILOT-REPORT v1
-     item: I6
+     item: I5
      site_count: <number of sites>
      Then, using your Slack connector, post the block unchanged to {channelName}. Post only the block.
      ```

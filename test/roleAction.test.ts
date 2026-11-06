@@ -23,7 +23,7 @@ describe("role buttons (Scenario 1)", () => {
     expect(deps.fake.of("chat.update")).toHaveLength(1);
     expect(update.text).toContain("non-technical");
     expect(update.blocks.some((b) => b.type === "actions")).toBe(false);
-    expect(Object.keys(itemStatuses(deps, "U1"))).toEqual(["I1", "I2", "I3", "I4", "I7"]);
+    expect(Object.keys(itemStatuses(deps, "U1"))).toEqual(["I1", "I2", "I3", "I4", "I6"]);
     expect(deps.fake.of("chat.postMessage").filter((c) => String(c.args.text).includes("onboarding checklist"))).toHaveLength(1);
   });
 
@@ -72,6 +72,6 @@ describe("role buttons (Scenario 1)", () => {
     });
     expect(deps.fake.of("chat.update").at(-1)?.args.text).toContain("technical");
     expect(deps.fake.of("chat.postMessage").filter((c) => String(c.args.text).includes("onboarding checklist"))).toHaveLength(1);
-    expect(Object.keys(itemStatuses(deps, "U1"))).toHaveLength(7);
+    expect(Object.keys(itemStatuses(deps, "U1"))).toHaveLength(6);
   });
 });

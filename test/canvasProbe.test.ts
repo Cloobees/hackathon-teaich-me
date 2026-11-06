@@ -54,7 +54,7 @@ describe("the probe's real-body variants", () => {
     const technical = sent.find((m) => m.includes("Connect Atlassian"));
     const nonTechnical = sent.filter((m) => m.startsWith("The glossary canvas: https://acme.slack.com/docs/T1/F1") && !m.includes("Connect Atlassian") && m.includes("Step 5"));
     expect(technical).toContain("The glossary canvas: https://acme.slack.com/docs/T1/F1");
-    expect(technical).toContain("- [ ] Step 7: ");
+    expect(technical).toContain("- [ ] Step 6: ");
     expect(nonTechnical.length).toBeGreaterThan(0);
   });
 });

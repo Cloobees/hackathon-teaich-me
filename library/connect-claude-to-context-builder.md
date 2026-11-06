@@ -4,7 +4,7 @@ roles: all
 item: I2
 action: |
   1. In Claude: *Settings* > *Connectors*, find *Context Builder* in the list and click *Connect*. Sign in with your Synechron account. It is a standard connector, so you add no URL.
-  2. New chat, switch it on, and ask your Claude:
+  2. Open a new chat, make sure that connector is active and ask your Claude:
      ```
      Using your Context Builder connector, save a markdown file named onboarding-test.md in my personal USER scope with the content "Onboarding test". Save it as a file, not a node, and do not ask me anything.
      ```

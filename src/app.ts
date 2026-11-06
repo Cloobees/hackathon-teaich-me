@@ -21,7 +21,15 @@ const store = openStore(config.dbPath);
 const items = loadItems();
 const claude = selectClaudeClient();
 
+// SLACK_LOG_LEVEL=debug prints the Socket Mode connection and every envelope Slack sends (for a bot that looks silent).
 const app = new App({ token: config.botToken, appToken: config.appToken, socketMode: true });
+
+// One line per request Slack delivers (no message text), so a silent bot can be told apart from a command that never arrives.
+app.use(async ({ body, next }) => {
+  const b = body as { type?: string; command?: string; event?: { type?: string } };
+  log("incoming", { type: b.type ?? (b.command ? "slash_command" : "unknown"), command: b.command, event: b.event?.type });
+  await next();
+});
 
 const depsFor = (client: unknown): Deps => ({
   store,
@@ -29,12 +37,12 @@ const depsFor = (client: unknown): Deps => ({
   items,
   libraryDir: config.libraryDir,
   skillZipPath: config.skillZipPath,
+  assetsDir: config.assetsDir,
   botMention: config.botMention,
   now: () => new Date().toISOString(),
   log,
   operators: config.operatorIds,
   glossaryUrl: config.glossaryUrl,
-  harnessRepo: config.harnessRepo,
   checklistSurface: config.checklistSurface,
   canvasUrl: (id) => (workspace ? `${workspace.url}/docs/${workspace.teamId}/${id}` : ""),
 });

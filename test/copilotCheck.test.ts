@@ -58,7 +58,7 @@ describe("skill-zip instruction text (BP-050)", () => {
     expect(i4()).not.toContain("skills/copilot-check");
   });
 
-  it("I2, I4 and I6 hold no paste text and no Get report prompt (FR-VF-015)", () => {
+  it("I2, I4 and I5 hold no paste text and no Get report prompt (FR-VF-015)", () => {
     for (const name of ["connect-claude-to-context-builder.md", "add-a-skill-to-the-project.md", "connect-atlassian.md"]) {
       const text = readFileSync(join(libraryDir, name), "utf8");
       expect(text, name).not.toMatch(/paste/i);
