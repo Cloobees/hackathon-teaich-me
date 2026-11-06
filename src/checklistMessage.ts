@@ -1,5 +1,6 @@
-import { createRows, getRows, nextPending, tick, type ChecklistRow, type ItemDef, type TickResult } from "./checklist.js";
+import { createRows, getRows, itemsForRole, nextPending, tick, type ChecklistRow, type ItemDef, type TickResult } from "./checklist.js";
 import type { Deps } from "./deps.js";
+import { glossaryBlock } from "./glossary.js";
 import { instructionButtons, itemLabel, sendInstruction } from "./instruction.js";
 import type { Block } from "./slack.js";
 import type { Method, Role } from "./store.js";
@@ -13,7 +14,7 @@ export function renderChecklist(deps: Deps, role: Role, items: ItemDef[], rows: 
   const next = nextPending(items, rows);
   const done = rows.filter((r) => r.status === "ticked").length;
   const blocks: Block[] = [];
-  if (deps.glossaryUrl) blocks.push({ type: "section", text: { type: "mrkdwn", text: glossaryLine(deps) } });
+  if (deps.glossaryUrl) blocks.push(glossaryBlock(deps.glossaryUrl));
   blocks.push(
     { type: "header", text: { type: "plain_text", text: "Your onboarding checklist" } },
     { type: "section", text: { type: "mrkdwn", text: `Role: *${role}*. ${done} of ${items.length} done.` } },
@@ -34,6 +35,19 @@ export function renderChecklist(deps: Deps, role: Role, items: ItemDef[], rows: 
 /** The Home tab carries the checklist blocks where a bot DM will not pin them (A-CL-009). */
 const publishHome = (deps: Deps, memberId: string, blocks: Block[]) =>
   deps.slack.views.publish({ user_id: memberId, view: { type: "home", blocks } });
+
+/** The Home tab: the member's checklist, or a pointer to `/onboard` for someone who has not started. */
+export async function handleHomeOpened(deps: Deps, memberId: string): Promise<void> {
+  const member = deps.store.get<{ role: Role | null }>("SELECT role FROM member WHERE member_id = ?", memberId);
+  const blocks: Block[] = member?.role
+    ? renderChecklist(deps, member.role, itemsForRole(deps.items, member.role), getRows(deps.store, memberId)).blocks
+    : [
+        { type: "header", text: { type: "plain_text", text: "Onboarding Copilot" } },
+        { type: "section", text: { type: "mrkdwn", text: "You have not started yet. Type `/onboard` in the *Messages* tab." } },
+        ...(deps.glossaryUrl ? [glossaryBlock(deps.glossaryUrl)] : []),
+      ];
+  await publishHome(deps, memberId, blocks);
+}
 
 /** Inserts the rows for the role, posts the one checklist message, stores its timestamp and pins it; a refused pin falls back to the Home tab. */
 export async function createChecklist(deps: Deps, memberId: string, role: Role): Promise<void> {

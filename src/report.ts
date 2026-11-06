@@ -9,7 +9,7 @@ export type Rule =
   | "via-claude"
   | "version"
   | "item"
-  | "i2-slug"
+  | "i2-email"
   | "i2-activity"
   | "i3-project"
   | "i4-skill"
@@ -78,11 +78,11 @@ export function validateReport(text: string, ctx: ValidateContext): Validation {
   if (!REPORT_ITEM_IDS.includes(item)) return fail("item", `${item} has no report block. I read reports for I2 to I6.`);
 
   if (item === "I2") {
-    const expected = ctx.memberEmail ? `my-workspace@${ctx.memberEmail}`.toLowerCase() : undefined;
-    if (!expected || f.scope_slug?.toLowerCase() !== expected) {
-      return fail("i2-slug", "The scope in the block is not your Personal Workspace (my-workspace@ followed by your email).");
+    const expected = ctx.memberEmail?.toLowerCase();
+    if (!expected || f.email?.toLowerCase() !== expected) {
+      return fail("i2-email", "The email in the block is not your own Context Builder account. Ask your Claude to read it from your USER scope and post the report again.");
     }
-    const activity = Date.parse(f.last_knowledge_activity ?? "");
+    const activity = Date.parse(f.last_activity ?? "");
     const started = Date.parse(ctx.roleChosenAt ?? "");
     if (Number.isNaN(activity) || Number.isNaN(started) || activity <= started) {
       return fail("i2-activity", "I see no Context Builder activity since you started. Create a note in Context Builder, then ask your Claude to post the report again.");

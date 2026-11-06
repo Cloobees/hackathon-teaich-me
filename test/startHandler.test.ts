@@ -118,17 +118,17 @@ describe("first message (FR-ST-008, Scenarios 2, 3, 4 and 6)", () => {
   const welcomeBlocks = (deps: ReturnType<typeof makeDeps>) => posts(deps)[0]?.blocks ?? [];
   const roleBlocks = (deps: ReturnType<typeof makeDeps>) => posts(deps)[1]?.blocks ?? [];
 
-  it("posts the welcome first (link line, then body, no button), then the role question with the two definitions and one actions block", async () => {
+  it("posts the welcome first (body, then the glossary link button), then the role question with the two definitions and one actions block", async () => {
     const deps = makeDeps({ glossaryUrl: URL });
     await startOnboarding(deps, { memberId: "U1", startedBy: "command" });
     expect(posts(deps)).toHaveLength(2);
     const welcome = welcomeBlocks(deps);
     const welcomeJson = JSON.stringify(welcome);
-    expect(welcomeJson.indexOf(URL)).toBeGreaterThan(-1);
-    expect(welcomeJson.indexOf(URL)).toBeLessThan(welcomeJson.indexOf(BODY));
+    expect(welcomeJson.indexOf(BODY)).toBeGreaterThan(-1);
+    expect((welcome.at(-1) as { accessory?: unknown } | undefined)?.accessory).toMatchObject({ type: "button", url: URL, action_id: "open_glossary" });
     expect(welcome.some((b) => b.type === "actions")).toBe(false);
     expect(welcomeJson).not.toContain("Which describes you better?");
-    expect(welcomeJson).not.toContain('"button"');
+    expect(posts(deps)[0]?.text).toContain(URL);
 
     const blocks = roleBlocks(deps);
     const json = JSON.stringify(blocks);

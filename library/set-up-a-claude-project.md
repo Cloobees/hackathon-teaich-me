@@ -3,17 +3,17 @@ title: Set up a Claude Project
 roles: all
 item: I3
 action: |
-  1. In Claude, open *Projects* and click *New project*.
-  2. Name it *Onboarding sandbox* and add one line of instructions, for example: _"Answer briefly and ask me one question at a time."_
-  3. Start a chat inside the Project and give your Claude the prompt below. It tells me which Project you are working in, in {channelName}.
+  1. In Claude: *Projects* > *New project*.
+  2. Name it *Onboarding sandbox*. Add one line of instructions.
+  3. Start a chat in the Project and ask your Claude:
      ```
-     Find the name of the Claude Project this chat is in and fill it into this block:
+     Find the name of the Claude Project this chat is in. Fill in this block:
      COPILOT-REPORT v1
      item: I3
      project_name: <name of this Project>
      Then, using your Slack connector, post the block unchanged to {channelName}. Post only the block.
      ```
-check: I will tick this step when I read that report in your channel. I also tick it when you finish the next step. If I do not, click I did it and confirm.
+check: I tick this on that report, or when you finish the next step.
 ---
 <!-- trust-marker: yellow - 2026-11-03 - claude-session-2026-11-03 - proposed content, awaiting author approval -->
 <!-- [TO CONFIRM: exact menu names for creating a Project] -->

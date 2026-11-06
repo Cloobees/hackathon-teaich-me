@@ -1,10 +1,11 @@
 import { cpSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resetMember } from "../src/checklist.js";
 import { applyTick } from "../src/checklistMessage.js";
-import { sendInstruction } from "../src/instruction.js";
+import { instructionText, sendInstruction } from "../src/instruction.js";
 import { getReportChannel } from "../src/store.js";
 import { loadLibrary } from "../src/library.js";
 import type { Role } from "../src/store.js";
@@ -441,5 +442,22 @@ describe("a failed profile lookup does not fix the channel name for good (FR-VF-
     expect(calls).toBe(2);
     expect(getReportChannel(deps.store, "U1")?.name).toBe("onboarding-copilot-u1");
     expect(deps.logs.some((l) => l.includes("users_info_failed"))).toBe(true);
+  });
+});
+
+const REAL_LIBRARY = fileURLToPath(new URL("../library", import.meta.url));
+
+describe("report channel reference", () => {
+  const item = { id: "I3", name: "Set up a Claude Project", roles: "all", order: 3 } as never;
+  it("names the channel by ID too once it is bound, so Claude can post to a private channel", () => {
+    const deps = makeDeps({ libraryDir: REAL_LIBRARY });
+    const text = instructionText(deps, item, "technical", "onboarding-copilot-u1", "C0BOUND01");
+    expect(text).toContain("onboarding-copilot-u1 (channel ID C0BOUND01)");
+  });
+  it("names it by name only before it is bound, and always for I1", () => {
+    const deps = makeDeps({ libraryDir: REAL_LIBRARY });
+    expect(instructionText(deps, item, "technical", "onboarding-copilot-u1")).not.toContain("channel ID");
+    const i1 = { id: "I1", name: "Connect Claude to Slack", roles: "all", order: 1 } as never;
+    expect(instructionText(deps, i1, "technical", "onboarding-copilot-u1", "C0BOUND01")).not.toContain("channel ID");
   });
 });

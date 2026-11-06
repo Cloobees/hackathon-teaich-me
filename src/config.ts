@@ -41,6 +41,8 @@ export interface CopilotConfig {
   botMention: string;
   /** `owner/name` the I5 report must name; unset accepts any non-empty repo. */
   harnessRepo?: string;
+  /** Slack `app_id` of the Claude app (`A...`), for workspaces where the connector footer carries no `<@...>` mention. */
+  claudeAppId?: string;
 }
 
 /** Settings for the Onboarding Copilot. Throws `missing <NAME>` for the first required variable that is absent. */
@@ -65,6 +67,7 @@ export function loadCopilotConfig(env: NodeJS.ProcessEnv = process.env): Copilot
     // the bot user's display_name from the manifest (onboarding-copilot).
     botMention: env.BOT_MENTION || DEFAULT_BOT_MENTION,
     harnessRepo: env.HARNESS_REPO?.trim() || undefined,
+    claudeAppId: env.CLAUDE_APP_ID?.trim() || undefined,
   };
 }
 

@@ -3,17 +3,16 @@ title: Connect GitHub
 roles: technical
 item: I5
 action: |
-  1. In Claude, open *Settings*, then *Connectors*, and choose *GitHub*. Click *Connect* and authorise your GitHub account.
-  2. Give it access to the harness repository.
-  3. In a chat with the GitHub connector switched on, give your Claude the prompt below. It checks it can read the repository and tells me, in {channelName}.
+  1. In Claude: *Settings* > *Connectors* > *GitHub* > *Connect*. Give it the harness repo.
+  2. In a chat with GitHub on, ask your Claude:
      ```
-     Using your GitHub connector, list the files in the root of the harness repository I use for onboarding. If you can read them, fill the repository's owner/name into this block:
+     Using your GitHub connector, list the files in the root of the harness repository I use for onboarding. If you can read them, fill in this block:
      COPILOT-REPORT v1
      item: I5
      repo: <owner/name of the repository>
-     Then, using your Slack connector, post the block unchanged to {channelName}. Post only the block. If you cannot read the repository, tell me why and post nothing.
+     Then, using your Slack connector, post the block unchanged to {channelName}. Post only the block. If you cannot read it, say why and post nothing.
      ```
-check: I will tick this step when I read that report in your channel. If I do not, click I did it and confirm.
+check: I tick this on that report.
 ---
 <!-- trust-marker: yellow - 2026-11-03 - claude-session-2026-11-03 - proposed content, awaiting author approval -->
 <!-- [TO CONFIRM: exact menu names, and whether the practice uses the GitHub connector or Claude Code] -->

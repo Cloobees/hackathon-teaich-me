@@ -10,7 +10,7 @@ const MARK = ` *Sent using* <@${CLAUDE_APP}>`;
 const block = (fields: Record<string, string>, { version = 1, mark = true }: { version?: number; mark?: boolean } = {}) =>
   [`COPILOT-REPORT v${version}`, ...Object.entries(fields).map(([k, v]) => `${k}: ${v}`)].join("\n") + (mark ? MARK : "");
 const i2 = (over: Record<string, string> = {}) =>
-  block({ item: "I2", scope_slug: "my-workspace@sam@example.com", last_knowledge_activity: "2026-10-26T10:12:00Z", ...over });
+  block({ item: "I2", email: "sam@example.com", last_activity: "2026-10-26T10:12:00Z", ...over });
 
 describe("validateReport: one fixture per rule (Scenario 1)", () => {
   it("passes a valid I2 block, with no nonce line", () => {
@@ -65,7 +65,7 @@ skill: copilot-check *Sent using* <@U0CDESX6B0V>`;
       validateReport(i2().replace(MARK, ""), ctx),
       validateReport(block({ item: "I2" }, { version: 2 }), ctx),
       validateReport(block({ item: "I7" }), ctx),
-      validateReport(i2({ last_knowledge_activity: "null" }), ctx),
+      validateReport(i2({ last_activity: "null" }), ctx),
       validateReport(block({ item: "I3" }), ctx),
       validateReport(block({ item: "I5" }), ctx),
       validateReport(block({ item: "I6", site_count: "0" }), ctx),
@@ -73,14 +73,14 @@ skill: copilot-check *Sent using* <@U0CDESX6B0V>`;
     for (const message of messages) expect(message).not.toMatch(/check button|get report prompt|paste/i);
     expect(messages[2]).toMatch(/post the block again, unchanged/i);
   });
-  it("I2 slug is not the member's Personal Workspace", () => {
-    expect(validateReport(i2({ scope_slug: "my-workspace@other@example.com" }), ctx)).toMatchObject({ rule: "i2-slug" });
-    expect(validateReport(i2(), { ...ctx, memberEmail: undefined })).toMatchObject({ rule: "i2-slug" });
+  it("I2 email is not the member's own Context Builder email", () => {
+    expect(validateReport(i2({ email: "other@example.com" }), ctx)).toMatchObject({ rule: "i2-email" });
+    expect(validateReport(i2(), { ...ctx, memberEmail: undefined })).toMatchObject({ rule: "i2-email" });
   });
   it("I2 activity before the checklist start, null, or equal to it (Scenario 3)", () => {
-    expect(validateReport(i2({ last_knowledge_activity: "2026-10-26T09:40:00Z" }), ctx)).toMatchObject({ rule: "i2-activity" });
-    expect(validateReport(i2({ last_knowledge_activity: "null" }), ctx)).toMatchObject({ rule: "i2-activity" });
-    expect(validateReport(i2({ last_knowledge_activity: STARTED }), ctx)).toMatchObject({ rule: "i2-activity" });
+    expect(validateReport(i2({ last_activity: "2026-10-26T09:40:00Z" }), ctx)).toMatchObject({ rule: "i2-activity" });
+    expect(validateReport(i2({ last_activity: "null" }), ctx)).toMatchObject({ rule: "i2-activity" });
+    expect(validateReport(i2({ last_activity: STARTED }), ctx)).toMatchObject({ rule: "i2-activity" });
   });
   it("I3 project_name must be present and not empty (Scenario 15)", () => {
     expect(validateReport(block({ item: "I3" }), ctx)).toMatchObject({ ok: false, rule: "i3-project" });

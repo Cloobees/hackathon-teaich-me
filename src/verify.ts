@@ -80,6 +80,16 @@ export async function findClaudeAppId(deps: Pick<Deps, "slack" | "log">): Promis
   return undefined;
 }
 
+/**
+ * Some workspaces show the connector footer as plain `*Sent using* Claude` and no `<@...>` mention; Slack still sets the
+ * event's `app_id`. When that is the configured Claude app id, the footer is rewritten to the mention form the report
+ * and I1 rules read. A member cannot forge `app_id`, so this is no weaker than the mention.
+ */
+export function withClaudeMark(text: string, eventAppId: string | undefined, claudeAppId: string | undefined): string {
+  if (!claudeAppId || eventAppId !== claudeAppId) return text;
+  return text.replace(/\s*\*Sent using\*\s*Claude\s*$/, ` *Sent using* <@${claudeAppId}>`);
+}
+
 /** A channel message that mentions the Claude app ticks I1 `observed`, with the message ts as evidence (route assumed, SP-1). */
 export async function handleChannelMessage(
   deps: Deps,

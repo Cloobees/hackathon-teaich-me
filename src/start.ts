@@ -1,7 +1,9 @@
 import { createChecklist } from "./checklistMessage.js";
 import type { Deps } from "./deps.js";
+import { glossaryBlock } from "./glossary.js";
 import { firstMessageText, roleDefinitions } from "./library.js";
 import { handleReset } from "./reset.js";
+import type { Block } from "./slack.js";
 import type { Role } from "./store.js";
 
 export type StartOutcome = "sent" | "bot" | "duplicate" | "dm_failed";
@@ -39,12 +41,18 @@ export async function startOnboarding(deps: Deps, input: StartInput): Promise<St
   // The welcome is its own message with no button, posted before the role message (FR-ST-008, DD-ST-010).
   // It is read at each start, so an author's edit needs no deploy (FR-AS-008). With nothing to say it is skipped.
   const welcome = firstMessageText(deps.libraryDir, deps.glossaryUrl);
+  // The blocks carry the glossary as a button; the text (with the plain link) is the notification fallback.
+  const body = firstMessageText(deps.libraryDir);
+  const welcomeBlocks: Block[] = [
+    ...(body ? [{ type: "section", text: { type: "mrkdwn", text: body } }] : []),
+    ...(deps.glossaryUrl ? [glossaryBlock(deps.glossaryUrl)] : []),
+  ];
   let firstTs: string | undefined;
   if (welcome) {
     const posted = await deps.slack.chat.postMessage({
       channel: dm,
       text: welcome,
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: welcome } }],
+      blocks: welcomeBlocks,
     });
     firstTs = posted.ts;
   }

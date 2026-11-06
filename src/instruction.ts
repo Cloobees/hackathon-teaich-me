@@ -50,12 +50,14 @@ async function memberChannelName(deps: Deps, memberId: string): Promise<string> 
  * `check` line or a confirm line (FR-CL-013). A file with no `action` falls back to its body, so a library without
  * the keys keeps working until the authors add them.
  */
-export function instructionText(deps: Deps, item: ItemDef, role: Role, channel = ""): string {
+export function instructionText(deps: Deps, item: ItemDef, role: Role, channel = "", channelId?: string): string {
+  // The report prompts name the channel by ID as well: a member's Claude cannot find a private channel by name search.
+  const channelRef = channelId && item.id !== "I1" ? `${channel} (channel ID ${channelId})` : channel;
   try {
     const file = instructionFor(deps.libraryDir, item.id, role);
     if (file?.action) {
       const check = file.check ? `*I check:* ${file.check}` : "*You confirm:* I cannot check this step, so click *I did it* when you have done it.";
-      return fill(`*Do this:* ${file.action}\n${check}`, { channelName: channel, botMention: deps.botMention ?? "@onboarding-copilot" });
+      return fill(`*Do this:* ${file.action}\n${check}`, { channelName: channelRef, botMention: deps.botMention ?? "@onboarding-copilot" });
     }
     const text = file?.body;
     if (text) return text.length > MAX_INSTRUCTION ? `${text.slice(0, MAX_INSTRUCTION)}...` : text;
@@ -112,7 +114,8 @@ export async function sendInstruction(deps: Deps, memberId: string, channel: str
   const ack = done.length ? `:white_check_mark: Done: ${done.join(" and ")}.` : "";
   const heading = `${done.length ? "Next: " : ""}*${itemLabel(deps, role, next)}*`;
   // The channel name is built and stored at the first I1 instruction, then reused (FR-VF-018).
-  const instruction = `${heading}\n${instructionText(deps, next, role, await memberChannelName(deps, memberId))}`;
+  const reportChannel = await memberChannelName(deps, memberId);
+  const instruction = `${heading}\n${instructionText(deps, next, role, reportChannel, getReportChannel(deps.store, memberId)?.id ?? undefined)}`;
 
   const blocks: Block[] = [...(ack ? [mrkdwn(ack)] : []), ...splitMrkdwn(instruction).map(mrkdwn), { type: "actions", elements: instructionButtons(next) }];
   await deps.slack.chat.postMessage({ channel, text: [ack, instruction].filter(Boolean).join("\n"), blocks });

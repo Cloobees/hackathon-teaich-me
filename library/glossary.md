@@ -37,7 +37,7 @@ Claude working through several steps on its own, using tools, until a task is do
 A small piece of text, roughly a short word or part of one. Models read and write in tokens, and limits and costs are counted in them.
 
 ## Personal Workspace
-Your own Context Builder workspace. Only you can see it. Its name starts with `my-workspace@` followed by your email.
+Your own private space in Context Builder, tied to your account. Only you can see it.
 
 ## scope
 Where Context Builder knowledge lives: your personal workspace, a team workspace, a project, or global.

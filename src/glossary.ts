@@ -1,4 +1,5 @@
 import { glossaryLine, loadLibrary, titleOf } from "./library.js";
+import type { Block } from "./slack.js";
 
 /** The fixed list of 14 terms (assist requirement; the authors may change it, OQ-AS-002). */
 export const GLOSSARY_TERMS = [
@@ -39,6 +40,13 @@ export function definitionFor(libraryDir: string, question: string): string | un
 
 /** The reply to a where-is-the-glossary question; the first message opens with the same line (FR-AS-006, FR-AS-009). */
 export const glossaryLink = (url?: string) => (url ? glossaryLine(url) : "No glossary link is set yet.");
+
+/** The glossary as a section with an "Open glossary" link button, for the welcome and the checklist (the plain-text line stays as the fallback). */
+export const glossaryBlock = (url: string): Block => ({
+  type: "section",
+  text: { type: "mrkdwn", text: ":book: *Onboarding Glossary*\nThe Claude terms you will meet, in one place." },
+  accessory: { type: "button", action_id: "open_glossary", url, text: { type: "plain_text", text: "Open glossary" } },
+});
 
 const LOCATION = /\b(where|link|find|what\s+is|what's|whats|show|open)\b/i;
 

@@ -1,3 +1,4 @@
+import { withClaudeMark } from "../src/verify.js";
 import { describe, expect, it } from "vitest";
 import { setReportChannel } from "../src/store.js";
 import { handleAttest, handleChannelMessage, handleChannelReport } from "../src/verify.js";
@@ -11,7 +12,7 @@ const OTHER = "C0OTHER01";
 // A report counts by channel, author and this mark (DD-VF-014, no nonce).
 const SENT_USING = " *Sent using* <@U0CDESX6B0V>";
 const i2Block = (activity = "2026-10-26T10:12:00Z") =>
-  `COPILOT-REPORT v1\nitem: I2\nscope_slug: my-workspace@sam@example.com\nlast_knowledge_activity: ${activity}${SENT_USING}`;
+  `COPILOT-REPORT v1\nitem: I2\nemail: sam@example.com\nlast_activity: ${activity}${SENT_USING}`;
 const i4Block = `COPILOT-REPORT v1\nitem: I4\nskill: copilot-check${SENT_USING}`;
 const i6Block = `COPILOT-REPORT v1\nitem: I6\nsite_count: 2${SENT_USING}`;
 
@@ -173,5 +174,22 @@ repo: ${repo}${SENT_USING}`;
     const deps = await ready();
     await report(deps, i5Block("any/repo"), "9.4");
     expect(itemStatuses(deps, "U1").I5).toBe("ticked");
+  });
+});
+
+describe("withClaudeMark", () => {
+  const APP = "A08SF47R6P4";
+  it("rewrites a plain 'Sent using Claude' footer to the mention form when the event app_id is the Claude app", () => {
+    expect(withClaudeMark("Hello *Sent using* Claude", APP, APP)).toBe(`Hello *Sent using* <@${APP}>`);
+  });
+  it("leaves the text alone for another app_id, no app_id, or no configured id", () => {
+    const text = "Hello *Sent using* Claude";
+    expect(withClaudeMark(text, "A0OTHER", APP)).toBe(text);
+    expect(withClaudeMark(text, undefined, APP)).toBe(text);
+    expect(withClaudeMark(text, APP, undefined)).toBe(text);
+  });
+  it("does not rewrite a footer typed in the middle of a message", () => {
+    const text = "*Sent using* Claude and more";
+    expect(withClaudeMark(text, APP, APP)).toBe(text);
   });
 });
